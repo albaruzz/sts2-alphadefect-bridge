@@ -1,12 +1,11 @@
-using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Sts2Bridge;
 
 /// <summary>
-/// Runtime configuration for Sts2Bridge. Loaded from bridge_config.json next to Sts2Bridge.dll,
-/// with optional environment variable overrides (STS2_BRIDGE_HOST, STS2_BRIDGE_PORT, STS2_BRIDGE_AUTO, STS2_BRIDGE_DELAY_MS).
+/// Runtime configuration for Sts2Bridge v1.1.0. Loaded from and persisted to bridge_config.json
+/// next to Sts2Bridge.dll, with live synchronization between the STS2 Modding Screen UI and In-Run HUD.
 /// </summary>
 public sealed class BridgeConfig
 {
@@ -15,6 +14,13 @@ public sealed class BridgeConfig
 
     [JsonPropertyName("port")]
     public int Port { get; set; } = 18765;
+
+    /// <summary>Inference backend: "auto" (TCP if connected, else built-in .s2nn), "builtin", or "tcp".</summary>
+    [JsonPropertyName("backend")]
+    public string Backend { get; set; } = "auto";
+
+    [JsonPropertyName("top_k")]
+    public int TopK { get; set; } = 3;
 
     [JsonPropertyName("auto_play")]
     public bool AutoPlay { get; set; } = false;
@@ -37,7 +43,62 @@ public sealed class BridgeConfig
     [JsonPropertyName("show_overlay")]
     public bool ShowOverlay { get; set; } = true;
 
+    public event Action? Changed;
+
     public static string ModDir { get; private set; } = AppContext.BaseDirectory;
+
+    static readonly JsonSerializerOptions SaveJsonOpts = new()
+    {
+        WriteIndented = true,
+    };
+
+    public void Normalize()
+    {
+        TopK = Math.Clamp(TopK, 1, 10);
+        ActionDelayMs = Math.Clamp(ActionDelayMs, 50, 2000);
+        StabilizeMs = Math.Clamp(StabilizeMs, 30, 1000);
+        string b = (Backend ?? "auto").Trim().ToLowerInvariant();
+        Backend = b is "builtin" or "tcp" or "auto" ? b : "auto";
+    }
+
+    public void CycleBackend()
+    {
+        Backend = Backend switch
+        {
+            "auto" => "builtin",
+            "builtin" => "tcp",
+            _ => "auto",
+        };
+        SaveAndNotify();
+    }
+
+    public string BackendDisplayLabel() => Backend switch
+    {
+        "builtin" => "仅内置模型 (免配置)",
+        "tcp" => "仅外部服务 (Python)",
+        _ => "自动 (内置兜底/外部优先)",
+    };
+
+    public void SaveAndNotify()
+    {
+        Normalize();
+        Save();
+        try { Changed?.Invoke(); } catch { }
+    }
+
+    public void Save()
+    {
+        try
+        {
+            Normalize();
+            string cfgPath = Path.Combine(ModDir, "bridge_config.json");
+            File.WriteAllText(cfgPath, JsonSerializer.Serialize(this, SaveJsonOpts));
+        }
+        catch (Exception e)
+        {
+            BridgeLog.Warn($"Failed to save bridge_config.json: {e.Message}");
+        }
+    }
 
     public static BridgeConfig Load()
     {
@@ -64,11 +125,16 @@ public sealed class BridgeConfig
             cfg.Host = envHost.Trim();
         if (int.TryParse(Environment.GetEnvironmentVariable("STS2_BRIDGE_PORT"), out int envPort) && envPort > 0)
             cfg.Port = envPort;
+        if (Environment.GetEnvironmentVariable("STS2_BRIDGE_BACKEND") is { Length: > 0 } envBackend)
+            cfg.Backend = envBackend.Trim();
+        if (int.TryParse(Environment.GetEnvironmentVariable("STS2_BRIDGE_TOPK"), out int envTopK))
+            cfg.TopK = envTopK;
         if (Environment.GetEnvironmentVariable("STS2_BRIDGE_AUTO") is { Length: > 0 } envAuto)
             cfg.AutoPlay = envAuto is "1" or "true" or "TRUE" or "yes";
         if (int.TryParse(Environment.GetEnvironmentVariable("STS2_BRIDGE_DELAY_MS"), out int envDelay) && envDelay >= 0)
             cfg.ActionDelayMs = envDelay;
 
+        cfg.Normalize();
         return cfg;
     }
 }

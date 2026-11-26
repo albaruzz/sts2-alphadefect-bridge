@@ -48,6 +48,9 @@ public sealed class SearchInfoPayload
 
 public sealed class PolicyReply
 {
+    [JsonPropertyName("type")]
+    public string? Type { get; set; }
+
     [JsonPropertyName("seq")]
     public int Seq { get; set; }
 
@@ -81,18 +84,22 @@ public sealed class PolicyReply
     [JsonPropertyName("ckpt_version")]
     public int? CkptVersion { get; set; }
 
+    [JsonPropertyName("obs_format")]
+    public int? ObsFormat { get; set; }
+
     [JsonPropertyName("infer_ms")]
     public float InferMs { get; set; }
+
+    [JsonIgnore]
+    public string Source { get; set; } = "tcp";
+
+    [JsonIgnore]
+    public string? ModelCharacter { get; set; }
 }
 
 /// <summary>
 /// Thread-safe asynchronous TCP client talking to python/play_live.py.
-/// Wire format (Sts2Bridge -> play_live.py):
-///   - Control messages: UTF-8 JSON line terminated by '\n'
-///   - Decision messages: UTF-8 JSON line terminated by '\n', immediately followed by
-///     4-byte little-endian int32 length + raw Observation.Serialize() bytes.
-/// Wire format (play_live.py -> Sts2Bridge):
-///   - UTF-8 JSON line terminated by '\n' deserialized into PolicyReply.
+/// Automatically pauses socket polling when BridgeConfig.Backend == "builtin".
 /// </summary>
 public sealed class BridgeLink : IDisposable
 {
@@ -107,11 +114,13 @@ public sealed class BridgeLink : IDisposable
     volatile bool _connected;
     volatile bool _forceReconnect;
     volatile string _lastError = "";
+    volatile int _serverObsFormat;
     Dictionary<string, object?>? _lastRunInfo;
     int _reconnectEpoch;
 
-    public bool IsConnected => _connected;
+    public bool IsConnected => _connected && _cfg.Backend != "builtin";
     public string LastError => _lastError;
+    public int? ServerObsFormat => _serverObsFormat > 0 ? _serverObsFormat : null;
     public int ReconnectEpoch => Volatile.Read(ref _reconnectEpoch);
 
     static readonly JsonSerializerOptions JsonOpts = new()
@@ -148,7 +157,7 @@ public sealed class BridgeLink : IDisposable
             ["loaded_floor"] = loadedFloor,
         };
         _lastRunInfo = payload;
-        EnqueueJson(payload);
+        if (_connected) EnqueueJson(payload);
     }
 
     public void SendDecision(int seq, string kind, string character, int act, int floor, IReadOnlyList<string> choices, byte[] rawFrame)
@@ -171,13 +180,16 @@ public sealed class BridgeLink : IDisposable
     public void SendRunEnd(bool victory, int act, int floor)
     {
         _lastRunInfo = null;
-        EnqueueJson(new Dictionary<string, object?>
+        if (_connected)
         {
-            ["type"] = "run_end",
-            ["victory"] = victory,
-            ["act"] = act,
-            ["floor"] = floor,
-        });
+            EnqueueJson(new Dictionary<string, object?>
+            {
+                ["type"] = "run_end",
+                ["victory"] = victory,
+                ["act"] = act,
+                ["floor"] = floor,
+            });
+        }
     }
 
     public bool TryDequeueReply(out PolicyReply? reply) => _replyQueue.TryDequeue(out reply);
@@ -191,36 +203,43 @@ public sealed class BridgeLink : IDisposable
     {
         while (!_cts.IsCancellationRequested)
         {
+            if (_cfg.Backend == "builtin")
+            {
+                Thread.Sleep(250);
+                continue;
+            }
+
             TcpClient? client = null;
             try
             {
                 _forceReconnect = false;
                 client = new TcpClient { NoDelay = true };
                 var connectTask = client.ConnectAsync(_cfg.Host, _cfg.Port);
-                while (!connectTask.IsCompleted && !_cts.IsCancellationRequested && !_forceReconnect)
+                while (!connectTask.IsCompleted && !_cts.IsCancellationRequested && !_forceReconnect && _cfg.Backend != "builtin")
                     Thread.Sleep(50);
                 if (_cts.IsCancellationRequested) break;
-                if (_forceReconnect || !client.Connected)
+                if (_forceReconnect || _cfg.Backend == "builtin" || !client.Connected)
                 {
                     if (connectTask.IsFaulted)
                         _lastError = connectTask.Exception?.GetBaseException().Message ?? "connect failed";
                     client.Close();
-                    WaitBackoff(1500);
+                    WaitBackoff(2000);
                     continue;
                 }
 
                 var stream = client.GetStream();
                 _connected = true;
                 _lastError = "";
+                while (_sendQueue.TryDequeue(out _)) { } // Drop stale queued items from before connect
                 Interlocked.Increment(ref _reconnectEpoch);
                 BridgeLog.Info($"Connected to play_live.py at {_cfg.Host}:{_cfg.Port}");
 
-                // Send handshake + cached active run_info on reconnect
                 WriteMessage(stream, JsonSerializer.Serialize(new Dictionary<string, object?>
                 {
                     ["type"] = "hello",
-                    ["mod_version"] = "1.0.0",
+                    ["mod_version"] = "1.1.0",
                     ["obs_version"] = Sts2Headless.Observation.FormatVersion,
+                    ["want_ack"] = true,
                 }, JsonOpts), null);
 
                 if (_lastRunInfo is { } runInfo)
@@ -234,16 +253,12 @@ public sealed class BridgeLink : IDisposable
                 };
                 readThread.Start();
 
-                while (!_cts.IsCancellationRequested && !_forceReconnect && _connected)
+                while (!_cts.IsCancellationRequested && !_forceReconnect && _connected && _cfg.Backend != "builtin")
                 {
                     if (_sendQueue.TryDequeue(out var item))
-                    {
                         WriteMessage(stream, item.JsonLine, item.BinaryFrame);
-                    }
                     else
-                    {
                         Thread.Sleep(4);
-                    }
                 }
 
                 readerCts.Cancel();
@@ -257,11 +272,12 @@ public sealed class BridgeLink : IDisposable
                 if (_connected)
                     BridgeLog.Info($"Disconnected from play_live.py ({_lastError})");
                 _connected = false;
+                _serverObsFormat = 0;
                 try { client?.Close(); } catch { }
             }
 
             if (!_cts.IsCancellationRequested)
-                WaitBackoff(_forceReconnect ? 100 : 2000);
+                WaitBackoff(_forceReconnect ? 100 : 2500);
         }
     }
 
@@ -283,8 +299,13 @@ public sealed class BridgeLink : IDisposable
                 try
                 {
                     var reply = JsonSerializer.Deserialize<PolicyReply>(line, JsonOpts);
-                    if (reply != null)
-                        _replyQueue.Enqueue(reply);
+                    if (reply == null) continue;
+                    if (reply.ObsFormat is > 0)
+                        _serverObsFormat = reply.ObsFormat.Value;
+                    if (reply.Type == "hello_ack" || reply.Type == "pong")
+                        continue;
+                    reply.Source = "tcp";
+                    _replyQueue.Enqueue(reply);
                 }
                 catch (Exception je)
                 {
@@ -319,7 +340,7 @@ public sealed class BridgeLink : IDisposable
     void WaitBackoff(int ms)
     {
         int slept = 0;
-        while (slept < ms && !_cts.IsCancellationRequested && !_forceReconnect)
+        while (slept < ms && !_cts.IsCancellationRequested && !_forceReconnect && _cfg.Backend != "builtin")
         {
             Thread.Sleep(50);
             slept += 50;

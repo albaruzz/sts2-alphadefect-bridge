@@ -1,196 +1,164 @@
 # sts2-alphadefect-bridge
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Game: Slay the Spire 2](https://img.shields.io/badge/Slay%20the%20Spire%202-v0.111.0%E2%80%93v0.114.0-purple.svg)](#2-编译与安装模组-building--installing-sts2bridge)
+[![Release: v1.1.0](https://img.shields.io/badge/Release-v1.1.0%20ReadyToUse-success.svg)](https://github.com/Kurisu934/sts2-alphadefect-bridge/releases)
+[![Game: Slay the Spire 2](https://img.shields.io/badge/Slay%20the%20Spire%202-v0.111.0%E2%80%93v0.114.0-purple.svg)](#1-三步安装整合包免-python开箱即用)
 
-**`sts2-alphadefect-bridge`** 是面向 [hmty-CHEN/AlphaDefect-Public](https://github.com/hmty-CHEN/AlphaDefect-Public) 开源权重与观测体系的 **《杀戮尖塔 2》（Slay the Spire 2）实机客户端桥接模组（`Sts2Bridge`）与实时策略 / 闭环树搜索服务端（`play_live.py`）**，以纯正 **MIT 协议** 开源发布。
+**`sts2-alphadefect-bridge`** 是面向 [hmty-CHEN/AlphaDefect-Public](https://github.com/hmty-CHEN/AlphaDefect-Public) 开源权重与观测体系的 **《杀戮尖塔 2》（Slay the Spire 2）全功能实机 AI 预测与自动打牌模组（`Sts2Bridge` v1.1.0）+ 可选实时闭环树搜索服务端（`play_live.py`）**，以纯正 **MIT 协议** 开源发布。
 
-> **English Quickstart** is provided in [Section 8](#8-english-quickstart) below.
+### v1.1.0 核心亮点
+
+- **零配置开箱即用（无需安装 Python / PyTorch）**：内置纯 `.NET 9.0` 跨平台硬件 SIMD 神经网络推理引擎（`NativeModel.cs`），整合包内已预置 **全部 6 位角色**（愚者 `FOOL`、铁甲战士 `IRONCLAD`、亡灵契约师 `NECROBINDER`、静默猎手 `SILENT`、储君 `REGENT`、故障机器人 `DEFECT`）的最优模型权重（`.s2nn`），支持 **Windows (`x64`) / macOS (`Apple Silicon arm64` & `x86_64`) / Linux (`x64`)** 解压即玩！
+- **局内实时查看下一步推荐与胜率**：右上角半透明穿透式中文面板（自动加载游戏内置中文字体，绝不遮挡正常鼠标点击）实时展示 **下一步推荐动作、视觉化概率条、预计通关胜率、局面价值估计**。
+- **双入口可交互模组选项（可调 `Top-K` 候选数 + `自动模式`）**：
+  1. **游戏原生 Mods（模组）界面**：选中 `AlphaDefect AI 助手 (Sts2Bridge)` 即可在下方 **`⚙ 模组选项 · AI 预测与自动模式`** 面板中直接拖动滑条调整 **`Top-K`（1–10）**、开关 **自动模式**、调节 **自动出牌间隔（50–1500 ms）** 与切换推理引擎；
+  2. **局内右上角悬浮工具栏**：随时点击面板顶部的 **`[自动: 关/开]`**、**`[单步]`** 或 **`[⚙ 选项]`** 展开内嵌滑条，在战斗中途实时增减 `Top-K` 候选展示数量，立即生效并自动保存到 `bridge_config.json`！
+- **无缝衔接外部 32 次模拟树搜索**：默认 `"auto"` 模式下，未启动外部服务时自动使用内置 `.s2nn` 模型毫秒级推理；若在后台启动 `python/play_live.py`（可随时通过 `sim_search.on` 开启三幕精英与 Boss 战 32 次闭环模拟树搜索），模组自动切换至外部树搜索服务！
+
+> **English Quickstart** is available in [Section 8](#8-english-quickstart) below.
 
 ---
 
 ## 目录 (Table of Contents)
 
-1. [项目架构与公平性保证](#1-项目架构与公平性保证)
-2. [编译与安装模组 (v0.114.0 / v0.113.1 / v0.111.0)](#2-编译与安装模组-building--installing-sts2bridge)
-3. [启动实时策略端 (`play_live.py`)](#3-启动实时策略端-play_livepy)
-4. [开启 32 次模拟的 Boss / 精英战闭环树搜索 (`sim_search.on`)](#4-开启-32-次模拟的-boss--精英战闭环树搜索-sim_searchon)
-5. [游戏内双模式 HUD 与快捷键 (`F8` / `F9` / `F10` / `F7`)](#5-游戏内双模式-hud-与快捷键-f8--f9--f10--f7)
+1. [三步安装整合包（免 Python，开箱即用）](#1-三步安装整合包免-python开箱即用)
+2. [游戏内模组选项、HUD 预测面板与快捷键](#2-游戏内模组选项hud-预测面板与快捷键)
+3. [项目架构与 100% 人类视野保证](#3-项目架构与-100-人类视野保证)
+4. [从源码编译模组与导出 `.s2nn` 权重](#4-从源码编译模组与导出-s2nn-权重)
+5. [进阶：启动 Python 服务端开启 32 次模拟闭环树搜索 (`play_live.py`)](#5-进阶启动-python-服务端开启-32-次模拟闭环树搜索-play_livepy)
 6. [硬件需求与配置参数](#6-硬件需求与配置参数)
-7. [自动化端到端测试 (`tests/test_play_live.py`)](#7-自动化端到端测试-teststest_play_livepy)
+7. [自动化数值等价校验与端到端测试](#7-自动化数值等价校验与端到端测试)
 8. [English Quickstart](#8-english-quickstart)
 9. [开源许可与第三方声明 (MIT License & Mega Crit Notice)](#9-开源许可与第三方声明-mit-license--mega-crit-notice)
 
 ---
 
-## 1. 项目架构与公平性保证
+## 1. 三步安装整合包（免 Python，开箱即用）
 
-在 [AlphaDefect-Public](https://github.com/hmty-CHEN/AlphaDefect-Public) 公开仓库中，训练引擎（`Sts2Headless`）、神经网络结构（`PolicyValueNet`）、公开权重（如愚者 `weights-v5` `fool_ema_v24181.pt` 及其他五个角色模型）和搜索模块（`headless_search.py` / `tree_live.py`）均已以 MIT 协议公开，但用于连接 Steam 正式版游戏的实机模组（`Sts2Bridge`）与实时策略驱动端（`play_live.py`）未包含在内（见上游 `NOTICE.md`）。本仓库完整补齐这一实机闭环：
+1. 前往 **[GitHub Releases](https://github.com/Kurisu934/sts2-alphadefect-bridge/releases/latest)** 下载 **`Sts2Bridge-v0.114.0-ReadyToUse.zip`**（适用于《杀戮尖塔 2》`v0.114.0`）。
+2. 解压缩后，将里面的 **`Sts2Bridge`** 文件夹完整放入游戏的 `mods/` 目录下：
+   - **Windows (Steam)**：`<Steam>\steamapps\common\Slay the Spire 2\mods\Sts2Bridge\`
+   - **macOS (Steam)**：`~/Library/Application Support/Steam/steamapps/common/Slay the Spire 2/SlayTheSpire2.app/Contents/MacOS/mods/Sts2Bridge/`
+   - **Linux (Steam)**：`~/.local/share/Steam/steamapps/common/Slay the Spire 2/mods/Sts2Bridge/`
+
+   目录结构如下：
+   ```text
+   mods/Sts2Bridge/
+   ├── Sts2Bridge.dll
+   ├── Sts2Bridge.json
+   ├── bridge_config.json
+   ├── vocab.txt
+   ├── aliases.txt
+   ├── no_downside_relics.txt
+   └── models/
+       ├── FOOL.s2nn          (v24181 · 愚者)
+       ├── IRONCLAD.s2nn      (v24782 · 铁甲战士 · 含 2-pass Recycle 回灌)
+       ├── NECROBINDER.s2nn   (v25875 · 亡灵契约师)
+       ├── SILENT.s2nn        (v26428 · 静默猎手)
+       ├── REGENT.s2nn        (v54603 · 储君)
+       └── DEFECT.s2nn        (v165018 · 故障机器人 · 含 HL-Gauss 分类价值头)
+   ```
+3. 启动《杀戮尖塔 2》，进入主菜单 **Mods（模组）** 界面确认启用 **`AlphaDefect AI 助手 (Sts2Bridge)`**，即可直接点击配置选项并开始任意角色对局！
+
+---
+
+## 2. 游戏内模组选项、HUD 预测面板与快捷键
+
+### 方式一：主菜单 `Mods` 界面直接设置
+
+在游戏主菜单打开 **Mods** 页面并点击 `AlphaDefect AI 助手 (Sts2Bridge)`，右侧底部会自动出现 **`⚙ 模组选项 · AI 预测与自动模式`** 交互面板：
+- **预测候选数量 (`Top-K`)**：支持滑条或 `[-]` / `[+]` 在 **`Top-1` ～ `Top-10`** 之间自由调节（默认 `Top-3`）；
+- **自动模式 (`Auto-Play`)**：一键切换 **仅显示预测建议（默认安全模式）** 或 **全自动执行最优动作**；
+- **自动出牌间隔**：`50 ms` ～ `1500 ms`（步进 `50 ms`，默认 `250 ms`）；
+- **推理引擎**：在 `自动 (内置兜底/外部优先)`、`仅内置模型 (免配置)`、`仅外部服务 (Python)` 之间切换；
+- **局内右上角预测面板**：开启或隐藏右上角 HUD。
+
+### 方式二：局内右上角悬浮工具栏与快捷键
+
+进入对局后，右上角面板除文字区域完全**鼠标穿透**外，顶部提供三个轻量按钮：
+- **`[自动: 关 / 开]`**：点击（或按 **`F8`**）即时切换辅助预测模式与全自动代打模式；
+- **`[单步]`**：点击（或按 **`F9`**）在辅助模式下让 AI 代执行当前这一步推荐动作；
+- **`[⚙ 选项]`**：点击即在局内原地展开 `Top-K` 滑条、自动延迟滑条与引擎切换按钮，拖动 `Top-K` 时下方候选列表**实时增减**！
+
+| 快捷键 | 功能 |
+|---|---|
+| **`F8`** | 切换 **`辅助预测`** 与 **`自动模式`** |
+| **`F9`** | 在辅助模式下**单步执行一次**当前推荐动作 |
+| **`F7`** | 显示 / 隐藏右上角预测面板 |
+| **`F10`** | 强制重连外部 `play_live.py` TCP 服务端 |
+
+---
+
+## 3. 项目架构与 100% 人类视野保证
 
 ```mermaid
 flowchart LR
     subgraph Game["Slay the Spire 2 (Steam 实机进程)"]
-        UI["Godot 主线程界面与同步器<br/>(战斗 / 选牌 / 奖励 / 商店 / 事件 / 地图)"]
-        OBS["共享观测编码器 Observation.Encode<br/>(Privileged=false, RouteSummary=true)"]
-        HUD["右上角穿透式 HUD 叠加层<br/>(Advisory 顾问模式 / Auto-Play 自动代打)"]
+        UI["Godot 主线程界面与同步器<br/>(战斗/选牌/奖励/商店/事件/地图)"]
+        OBS["共享观测编码器 Observation.Encode<br/>(Privileged=false, 按角色自动匹配 Format 19..28)"]
+        NATIVE["内置纯 .NET 9.0 SIMD 推理引擎<br/>NativeModel (.s2nn 全角色权重, 后台线程推理)"]
+        HUD["右上角中文 HUD + 可调 Top-K 选项抽屉<br/>+ 主菜单 NModInfoContainer 模组选项"]
         UI --> OBS
-        HUD -.-> UI
+        OBS -- "默认免配置直连" --> NATIVE
+        NATIVE --> HUD
+        HUD -. "自动模式 / 单步点击" .-> UI
     end
 
-    subgraph Py["Python 实时策略与搜索服务端 (play_live.py)"]
-        NET["PolicyValueNet (InferEngine)<br/>内容先验列名对齐 + 新增词表清零 + 等价候选合并"]
-        TREE["TreeSearchAdvisor / HeadlessSearchAdvisor<br/>(sim_search.on 3秒热开关 · 32次闭环模拟)"]
-        NET <--> TREE
+    subgraph Py["可选外部 Python 树搜索服务 (play_live.py)"]
+        TREE["PolicyValueNet + TreeSearchAdvisor<br/>(sim_search.on 3秒热开关 · 32次闭环模拟)"]
     end
 
-    OBS -- "TCP 127.0.0.1:18765<br/>JSON 行 + 小端长度前缀二进制帧" --> NET
-    TREE -- "JSON 决策回复<br/>(seq, action, top_k, value, searched)" --> HUD
+    OBS -. "TCP 127.0.0.1:18765 (可选)" .-> TREE
+    TREE -. "JSON 回复 (覆盖内置)" .-> HUD
 ```
 
-### 核心特性与严格人类视野保证
-
-- **与无头训练引擎逐位对齐的观测编码**：`Sts2Bridge` 通过 `engine/Directory.Build.targets` 直接链接并编译 AlphaDefect 的 MIT 观测编码器（`Observation.cs`、`Engine/Obs/**`、`Engine/Compat/**`），包含：
-  - **v0.114.0 有目标伤害预览口径补丁（`Observation.RawPreview`）**：仅在 `Observation.Encode` 编码瞬间将 `CreatureCmd.GetDamageResultsPreview` 保持在“掉血钩子之前”的基线，不改动任何实机结算或界面显示；
-  - **已知抽牌堆顶跟踪（`Observation.DrawTop`）**：通过 `CardPileCmd.Add` / `CardPile` 钩子仅记录被公开效果明确放到牌堆顶部的卡牌（区域 16–18）；
-  - **事件选项合并变量剥离（`StripMergedEventVars`）**：在编码瞬间还原 `NEventOptionButton._Ready` 合并进选项描述的全局事件变量，使事件帧与 `Sts2Headless` 完全一致；
-  - **词表别名兼容（`aliases.txt`）**：支持 `v0.114.0` 的 `CARD.TWIN_SHOT → CARD.RAPID_SHOT` 等跨版本同义映射。
-- **100% 人类可见信息（绝不作弊）**：
-  - 实机端固定 `Observation.Privileged = false`、`Observation.FutureContent = false`、`Observation.Oracle = false`，抽牌堆未知部分严格按卡牌词表 ID 字典序输出；
-  - Python 端推理前再次强制 `ragged.tok_priv[:] = 0`；
-  - 开启树搜索时，开局种子（游戏右上角公开显示）仅用于镜像重放“已经发生过的历史步”，每次推演在分支前立即 `reseed` 重置全部未来随机数并重洗未知抽牌堆。
-- **安全双模式运行**：默认以 **Advisory（顾问叠加层）模式** 启动，仅在右上角渲染鼠标完全穿透的策略建议面板，不自动点击任何按钮；按 **`F8`** 可随时切换 **Auto-Play（全自动出牌）**，按 **`F9`** 在顾问模式下单步执行当前推荐动作。
+- **逐位对齐训练引擎观测**：直接链接编译 AlphaDefect 的 MIT 观测编码器（含 `v0.114.0` 的 `Observation.RawPreview` 有目标伤害预览基线补丁、`Observation.DrawTop` 已知牌堆顶跟踪、`StripMergedEventVars` 事件变量还原、`aliases.txt` 同义映射），并根据当前角色模型自动切换 `Observation.FormatOverride`（故障机器人 `19`、储君 `20`、静默猎手 `23`、愚者 `27`、铁甲战士与亡灵契约师 `28`）。
+- **严格人类可见信息（绝不读取隐藏随机数）**：固定 `Observation.Privileged = false`、`FutureContent = false`、`Oracle = false`，未知抽牌堆严格按词表 ID 排序，内置 `NativeModel` 与外部 `play_live.py` 均强制忽略 `tok_priv`。
+- **等价动作合并贪心（`merged_argmax`）**：C# 内置引擎与 Python 服务端均完整实现等价候选概率合并，手中多张同名同属性手牌不会被拆分稀释概率。
 
 ---
 
-## 2. 编译与安装模组 (Building & Installing `Sts2Bridge`)
+## 4. 从源码编译模组与导出 `.s2nn` 权重
 
 ### 环境要求
 
 - **.NET 9.0 SDK**（`dotnet --version` ≥ 9.0）
-- 本地正版 Steam 安装的 **《杀戮尖塔 2》（Slay the Spire 2）**（编译时仅只读引用游戏目录下的 `sts2.dll`、`GodotSharp.dll`、`0Harmony.dll`，`Private=false`，绝不复制或分发游戏文件）
+- 本地正版 Steam 安装的 **《杀戮尖塔 2》**（仅只读引用 `sts2.dll`、`GodotSharp.dll`、`0Harmony.dll`，`<Private>false</Private>`，不复制任何游戏 DLL）
 
-### 方式一：一键编译并安装到游戏 `mods/Sts2Bridge/` 目录（推荐）
+### 编译并安装模组（支持 `v0.114.0` / `v0.113.1` / `v0.111.0`）
 
 ```bash
-# 默认按 v0.114.0 编译并复制模组文件到 <游戏根目录>/mods/Sts2Bridge/
-python3 tools/install_mod.py --game-dir "/path/to/Steam/steamapps/common/Slay the Spire 2"
-
-# 若你的游戏版本为 v0.113.1 或 v0.111.0，显式指定 --game-version：
+# 一键编译并安装到 <游戏根目录>/mods/Sts2Bridge/（自动识别 Windows / macOS .app / Linux 目录结构）
 python3 tools/install_mod.py \
   --game-dir "/path/to/Steam/steamapps/common/Slay the Spire 2" \
-  --game-version v0.113.1
-```
+  --models-dir "/path/to/exported_s2nn_models"
 
-Windows PowerShell 示例：
-
-```powershell
-python tools\install_mod.py --game-dir "C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2"
-```
-
-### 方式二：手动使用 `dotnet build` 多版本编译
-
-`engine/Directory.Build.props` 会根据 `Sts2GameVersion` 自动设置条件编译符号（`STS2_V0114` / `STS2_V0113` / `STS2_V0111`）并选择匹配的观测编码树：
-
-```bash
-# 1. 编译 v0.114.0（默认版本，含 RawPreview 伤害预览口径补丁与 Optimism / TwinShot 支持）
+# 或手动调用 dotnet build 指定游戏版本：
 dotnet build engine/Sts2Bridge/Sts2Bridge.csproj -c Release \
   -p:Sts2GameVersion=v0.114.0 \
   -p:Sts2GameDir="/path/to/Slay the Spire 2/data_sts2_windows_x86_64"
-
-# 2. 编译 v0.113.1 / v0.113.0（公开论文主线版本）
-dotnet build engine/Sts2Bridge/Sts2Bridge.csproj -c Release \
-  -p:Sts2GameVersion=v0.113.1 \
-  -p:Sts2GameDir="/path/to/game/v0.113.1"
-
-# 3. 编译 v0.111.0（早期评测基线版本）
-dotnet build engine/Sts2Bridge/Sts2Bridge.csproj -c Release \
-  -p:Sts2GameVersion=v0.111.0 \
-  -p:Sts2GameDir="/path/to/game/v0.111.0"
 ```
 
-编译产物位于 `engine/Sts2Bridge/bin/Release/net9.0/`，将以下 6 个文件复制到 `<Slay the Spire 2>/mods/Sts2Bridge/` 即可：
+### 将公开 `.pt` 检查点导出为内置 `.s2nn` 模型 (`tools/export_s2nn.py`)
 
-```text
-<Slay the Spire 2>/mods/Sts2Bridge/
-├── Sts2Bridge.dll
-├── Sts2Bridge.json
-├── bridge_config.json
-├── vocab.txt
-├── aliases.txt
-└── no_downside_relics.txt
+```bash
+# 单个检查点导出
+python3 tools/export_s2nn.py \
+  --ckpt /path/to/fool_ema_v24181_v0114_aligned.pt \
+  --out mods/Sts2Bridge/models/FOOL.s2nn
+
+# 批量导出全部 6 个角色并生成 PyTorch 对拍真值向量
+python3 tools/export_s2nn.py \
+  --all-dir /path/to/all_best_pts \
+  --out-dir mods/Sts2Bridge/models \
+  --verify-out /tmp/verify_cases.json
 ```
-
-启动游戏并在主菜单 **Mods（模组）** 界面确认勾选启用 `AlphaDefect Live Bridge (Sts2Bridge)`。
 
 ---
 
-## 3. 启动实时策略端 (`play_live.py`)
+## 5. 进阶：启动 Python 服务端开启 32 次模拟闭环树搜索 (`play_live.py`)
 
-### Python 依赖
-
-```bash
-pip install numpy torch
-```
-
-### 下载公开模型权重
-
-从 [hmty-CHEN/AlphaDefect-Public Releases](https://github.com/hmty-CHEN/AlphaDefect-Public/releases) 下载对应角色的 `.pt` 检查点（例如 `weights-v5` 中的愚者滑动平均权重 `fool_ema_v24181.pt`，或故障机器人、静默猎手、铁甲战士、亡灵契约师、储君权重）。
-
-### 启动服务
-
-在仓库根目录下运行（以便自动读取 `engine/game_version.txt` 与 `engine/catalog/`）：
-
-```bash
-# 使用愚者 v24181 权重启动实时策略服务（默认监听 127.0.0.1:18765）
-python3 python/play_live.py --ckpt /path/to/fool_ema_v24181.pt --device cuda
-
-# 纯 CPU 推理同样流畅（单步前向仅需数毫秒至数十毫秒）
-python3 python/play_live.py --ckpt /path/to/fool_ema_v24181.pt --device cpu --threads 4
-
-# 监控目录并在每局开始/结束时自动热更新最新 .pt 权重
-python3 python/play_live.py --ckpt-dir /path/to/checkpoints/ --device cuda
-```
-
-`play_live.py` 启动时会自动完成：
-1. **跨版本内容先验按特征名对齐**（`load_state(..., ckpt.get("content_names"))`，例如在 `v0.114.0` 1,196 列目录下载入 `v0.113.1` 1,195 列检查点时精确对齐 1,190 列、6 列新增特征置零，避免末尾补零错位）；
-2. **新增词表嵌入清零**（`zero_new_vocab`，例如词表从 `2,557` 扩至 `2,559` 时自动清零新牌嵌入行，同时保留旧版 `<unk>` 语义行）；
-3. **等价动作概率合并贪心**（`sts2rl.greedy.merged_argmax`：手里有多张完全相同的牌时按等价类合并概率后再取最大，避免概率被同类牌分摊）。
-
----
-
-## 4. 开启 32 次模拟的 Boss / 精英战闭环树搜索 (`sim_search.on`)
-
-`play_live.py` 原生集成 AlphaDefect 的闭环信息集树搜索（`TreeSearchAdvisor` / `HeadlessSearchAdvisor`）。树搜索需要一份编译好的 `AlphaDefect-Public` 无头引擎 `Sts2Headless.dll`（带 `Engine/Clone` 局面复制支持，用于跟着实机做同步镜像并在推演进程中 `restore + reseed` 分支推演）。
-
-### 方式一：通过哨兵文件 `sim_search.on` 动态热开关（无需重启 `play_live.py`）
-
-`play_live.py` 每 **3 秒** 检查一次当前目录 `./sim_search.on`（或 `~/.local/share/sls2/live/sim_search.on`，亦可通过 `--sentinel` 指定）：
-
-```bash
-# 开启三幕 Boss 与精英战 32 次模拟树搜索（下一局开局起镜像同步生效）
-cat > sim_search.on <<'EOF'
-{
-  "method": "tree",
-  "scope": "boss_elite",
-  "sims": 32,
-  "tree_procs": 8,
-  "dll": "/path/to/AlphaDefect-Public/game-v0.114.0/engine/Sts2Headless/bin/Release/net9.0/Sts2Headless.dll"
-}
-EOF
-
-# 随时关闭树搜索（即使在战斗中途删除也立即回退到纯网络贪心）
-rm -f sim_search.on
-```
-
-支持的 `scope` 范围：
-| `scope` | 搜索范围 | 说明 |
-|---|---|---|
-| `"boss_elite"` | 全部三幕的精英战与 Boss 战 | **推荐默认设置**（AlphaDefect 离线 3,000 局配对实测胜率 `62.13% → 68.37%`） |
-| `"boss"` | 全部三幕的 Boss 战 | 仅在 Boss 战启用深度推演 |
-| `"act3_boss"` | 仅第三幕双 Boss 战 | 仅在终幕 Boss 启用 |
-| `"all"` | 所有普通战、精英战与 Boss 战 | 全程战斗搜索 |
-
-### 方式二：命令行参数直接开启
+内置 `.s2nn` 模型提供极速纯网络贪心推理；若希望在精英战与 Boss 战进一步开启 **32 次闭环模拟信息集树搜索**（需编译带 `Clone` 模块的无头引擎 `Sts2Headless.dll`），只需在后台启动 `play_live.py`，模组在 `"auto"` 引擎模式下会自动检测连接并无缝切换：
 
 ```bash
 python3 python/play_live.py \
@@ -200,33 +168,27 @@ python3 python/play_live.py \
   --headless-dll /path/to/Sts2Headless.dll
 ```
 
-> **注意**：镜像进程需要从一局的起点（第 0 层）跟着实机同步推进；中途读档续玩（`loaded_floor > 0`）或中途才开启哨兵的那一局会自动回退为网络贪心策略，从新开局起正式启用树搜索。
+也可通过当前目录哨兵文件 `sim_search.on` 每 3 秒热开关树搜索（删除 `sim_search.on` 即刻回退纯网络贪心）：
+
+```bash
+echo '{"method": "tree", "scope": "boss_elite", "sims": 32, "dll": "/path/to/Sts2Headless.dll"}' > sim_search.on
+```
 
 ---
 
-## 5. 游戏内双模式 HUD 与快捷键 (`F8` / `F9` / `F10` / `F7`)
+## 6. 硬件需求与配置参数
 
-模组加载后会在游戏右上角（顶栏遗物下方）渲染一块半透明、**鼠标点击完全穿透**的状态叠加层：
+- **内置 `.s2nn` 引擎模式（默认免配置）**：任意支持《杀戮尖塔 2》的电脑均可零卡顿运行（额外内存占用仅约 `55 MB`，后台工作线程单步推理耗时约 `3–15 ms`，完全不占用主渲染线程）。
+- **外部 32 次模拟树搜索模式**：建议 8 核以上 CPU、空闲内存 ≥ 4 GB。
 
-- **蓝框 `ADVISORY`（默认安全顾问模式）**：仅实时展示推荐动作、前 3 个候选动作的概率分布、局面价值估计 `V` 与估算胜率 `Win≈%`，由玩家自己操作鼠标或按 `F9` 单步采纳。
-- **绿框 `AUTO-PLAY`（自动代打模式）**：在每个稳定决策点等待 `action_delay_ms`（默认 `250ms`）后自动执行策略返回的动作（严格校验 `seq` 序号，过期的旧回复自动丢弃）。
-- **金框 `[TREE OVERRIDE] / [TREE CONFIRMED]`**：当 Boss / 精英战触发闭环树搜索时，边框变为金色并显示模拟次数、耗时以及树搜索是否推翻了原网络贪心首选。
-
-| 快捷键 | 功能 |
-|---|---|
-| **`F8`** | 切换 **`ADVISORY`（顾问提示）** 与 **`AUTO-PLAY`（全自动代打）** 模式 |
-| **`F9`** | 在 `ADVISORY` 模式下**单步执行一次**当前推荐动作 |
-| **`F10`** | 立即强制重连 `play_live.py` TCP 服务端（重连后自动补发当前对局 `run_info`） |
-| **`F7`** | 显示 / 隐藏右上角 HUD 面板 |
-
-### `bridge_config.json` 与环境变量
-
-位于 `<Slay the Spire 2>/mods/Sts2Bridge/bridge_config.json`：
+### `bridge_config.json` 说明
 
 ```json
 {
   "host": "127.0.0.1",
   "port": 18765,
+  "backend": "auto",
+  "top_k": 3,
   "auto_play": false,
   "action_delay_ms": 250,
   "stabilize_ms": 120,
@@ -237,25 +199,19 @@ python3 python/play_live.py \
 }
 ```
 
-可用环境变量覆盖：`STS2_BRIDGE_HOST`、`STS2_BRIDGE_PORT`、`STS2_BRIDGE_AUTO=1`、`STS2_BRIDGE_DELAY_MS`。
-
 ---
 
-## 6. 硬件需求与配置参数
-
-- **仅策略网络实时推理（默认模式）**：
-  - **CPU 即可流畅运行**：任意现代 4 核以上 CPU、内存 ≥ 2 GB，单步推理耗时约 `3–30 ms`（GPU 上约 `1–5 ms`）。
-- **开启 32 次模拟闭环树搜索（`boss_elite`）**：
-  - 建议 **8 核以上 CPU**、空闲内存 **≥ 4 GB**（1 个镜像无头引擎进程 + 默认 8 个推演工作进程约占 `2.4–2.9 GB` 内存）；
-  - 若内存或核心较少，可在 `sim_search.on` 中调小 `"tree_procs": 4`、`"sims": 16`。
-
----
-
-## 7. 自动化端到端测试 (`tests/test_play_live.py`)
-
-仓库内置完整的端到端自动化测试脚本，无需启动 Steam 客户端即可在本地临时端口拉起真实的 `play_live.py`，模拟 `Sts2Bridge` 发送 `hello`、`run_info`、愚者（`FOOL`）格式 27 战斗帧（含重复打击牌等价类合并验证与特权特征清零验证）、带路线摘要的地图帧、动态 `sim_search.on` 哨兵切换与 `run_end`，并校验真实神经网络输出：
+## 7. 自动化数值等价校验与端到端测试
 
 ```bash
+# 1. 校验全部 6 个角色在 C# NativeModel 与 PyTorch PolicyValueNet.forward_infer 下的输出概率差 (< 3e-3)、Top-K 排序与动作完全一致
+python3 tests/verify_native_parity.py \
+  --models-dir /path/to/s2nn_models \
+  --verify-json /tmp/verify_cases.json \
+  --bridge-dll engine/Sts2Bridge/bin/Release/net9.0/Sts2Bridge.dll \
+  --game-dir /path/to/sts2_managed_dir
+
+# 2. 校验 play_live.py TCP 协议与真实检查点端到端推理
 python3 tests/test_play_live.py --ckpt /path/to/fool_ema_v24181.pt --device cpu
 ```
 
@@ -263,42 +219,26 @@ python3 tests/test_play_live.py --ckpt /path/to/fool_ema_v24181.pt --device cpu
 
 ## 8. English Quickstart
 
-**`sts2-alphadefect-bridge`** provides the missing MIT-licensed real-game client mod (`Sts2Bridge`) and live TCP policy / tree-search driver (`python/play_live.py`) for [hmty-CHEN/AlphaDefect-Public](https://github.com/hmty-CHEN/AlphaDefect-Public) in *Slay the Spire 2* (`v0.111.0` – `v0.114.0`).
+### Option A: Zero-Python Turnkey Mod (`Sts2Bridge-v0.114.0-ReadyToUse.zip`)
 
-### Step 1: Build & Install the `Sts2Bridge` Mod
+1. Download **`Sts2Bridge-v0.114.0-ReadyToUse.zip`** from [GitHub Releases](https://github.com/Kurisu934/sts2-alphadefect-bridge/releases/latest).
+2. Extract the `Sts2Bridge/` folder into your game's `mods/` directory:
+   - **Windows**: `<Steam>\steamapps\common\Slay the Spire 2\mods\Sts2Bridge\`
+   - **macOS**: `SlayTheSpire2.app/Contents/MacOS/mods/Sts2Bridge/`
+   - **Linux**: `<Steam>/steamapps/common/Slay the Spire 2/mods/Sts2Bridge/`
+3. Launch *Slay the Spire 2* and enable **AlphaDefect AI 助手 (Sts2Bridge)** in the **Mods** menu.
+   - Adjust **Top-K (`1..10`)**, **Auto-Play**, and **Action Delay** directly in the Mod menu panel or via the in-run top-right **`[⚙ 选项]`** button!
+   - Hotkeys: **`F8`** toggle Auto-Play / Advisory, **`F9`** single step, **`F7`** show/hide HUD, **`F10`** reconnect TCP.
 
-Requires **.NET 9.0 SDK** and your local Steam installation of *Slay the Spire 2*:
-
-```bash
-# Builds Sts2Bridge.dll (default v0.114.0; pass --game-version v0.113.1 or v0.111.0 if needed)
-# and installs Sts2Bridge.{dll,json}, bridge_config.json, vocab.txt, aliases.txt, no_downside_relics.txt
-# into <Slay the Spire 2>/mods/Sts2Bridge/
-python3 tools/install_mod.py --game-dir "/path/to/Steam/steamapps/common/Slay the Spire 2"
-```
-
-### Step 2: Run the Live Policy Server (`play_live.py`)
-
-Download a `.pt` checkpoint from [AlphaDefect-Public Releases](https://github.com/hmty-CHEN/AlphaDefect-Public/releases) (e.g., `fool_ema_v24181.pt` from `weights-v5`), install `numpy` and `torch`, and run from the repository root:
+### Option B: Build from Source & Optional Live Tree Search
 
 ```bash
-python3 python/play_live.py --ckpt /path/to/fool_ema_v24181.pt --device cuda
+python3 tools/install_mod.py --game-dir "/path/to/Slay the Spire 2"
+python3 tools/export_s2nn.py --all-dir /path/to/pts --out-dir "/path/to/Slay the Spire 2/mods/Sts2Bridge/models"
+
+# Optional external 32-sim Boss/Elite Tree Search server:
+python3 python/play_live.py --ckpt /path/to/fool_ema_v24181.pt --tree-search boss_elite --sims 32 --headless-dll /path/to/Sts2Headless.dll
 ```
-
-Optional **32-simulation Boss/Elite Tree Search** (polled live every 3 seconds without restarting):
-
-```bash
-echo '{"method": "tree", "scope": "boss_elite", "sims": 32, "dll": "/path/to/Sts2Headless.dll"}' > sim_search.on
-# Delete sim_search.on at any time to immediately return to greedy network play:
-rm -f sim_search.on
-```
-
-### Step 3: Launch *Slay the Spire 2*
-
-Enable **AlphaDefect Live Bridge** in the in-game **Mods** menu. Use hotkeys at any time:
-- **`F8`**: Toggle between **Advisory Mode** (default safe HUD overlay) and **Auto-Play Mode**
-- **`F9`**: Execute a single recommended action in Advisory Mode
-- **`F10`**: Reconnect TCP link (`127.0.0.1:18765`)
-- **`F7`**: Show / Hide the top-right HUD overlay
 
 ---
 
@@ -306,7 +246,7 @@ Enable **AlphaDefect Live Bridge** in the in-game **Mods** menu. Use hotkeys at 
 
 - 本仓库所有源代码、脚本、测试与文档均基于 **[MIT License](LICENSE)** 开源发布：
   - 共享观测编码器、兼容层、协议解析、网络结构与树搜索模块改编自 [hmty-CHEN/AlphaDefect-Public](https://github.com/hmty-CHEN/AlphaDefect-Public)（`Copyright (c) 2026 Qiyue Chen`，MIT License；本仓库**不包含**任何 `PerfPatches.cs` 代码）。
-  - 实机客户端桥接模组 `Sts2Bridge`、实时策略驱动端 `play_live.py`、HUD 叠加层、多版本构建配置与端到端测试由本仓库作者完成（`Copyright (c) 2026 Kurisu934 and Contributors`，MIT License）。
+  - 实机客户端桥接模组 `Sts2Bridge`、纯 `.NET` 推理引擎 `NativeModel.cs`、模组设置界面 `ModMenuUi.cs`、HUD 叠加层 `Overlay.cs`、权重导出器 `export_s2nn.py` 与实时驱动端 `play_live.py` 由本仓库作者完成（`Copyright (c) 2026 Kurisu934 and Contributors`，MIT License）。
 - **第三方权利声明（详见 [NOTICE.md](NOTICE.md)）**：
   - **《杀戮尖塔 2》（Slay the Spire 2）** 是 **Mega Crit Games** 的财产与注册商标，本项目与 Mega Crit Games 无任何官方关联。
-  - 本仓库**不包含**任何游戏二进制文件（`sts2.dll`、`GodotSharp.dll`、`0Harmony.dll`、`.pck`）、游戏美术音频资源、反编译源码或模型权重文件。用户须自行提供合法购买的本地 Steam 游戏目录（`Sts2GameDir`）进行编译与运行。
+  - 本 Git 源码仓库**不包含**任何游戏二进制文件（`sts2.dll`、`GodotSharp.dll`、`0Harmony.dll`、`.pck`）或反编译源码。Release 整合包亦仅包含 `Sts2Bridge.dll`、词表配置与 MIT 授权的 `.s2nn` 神经网络权重，绝不包含任何 Mega Crit 游戏文件。

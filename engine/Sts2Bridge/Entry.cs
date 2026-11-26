@@ -15,6 +15,7 @@ public static class Entry
     static bool _initialized;
     static Harmony? _harmony;
     static BridgeLink? _link;
+    static NativeModelManager? _nativeModels;
     static BridgeController? _controller;
 
     public static void Init()
@@ -24,9 +25,8 @@ public static class Entry
 
         var cfg = BridgeConfig.Load();
         BridgeLog.Init(BridgeConfig.ModDir);
-        BridgeLog.Info($"Initializing Sts2Bridge v1.0.0 in {BridgeConfig.ModDir} (target {cfg.Host}:{cfg.Port}, auto_play={cfg.AutoPlay})");
+        BridgeLog.Info($"Initializing Sts2Bridge v1.1.0 in {BridgeConfig.ModDir} (backend={cfg.Backend}, top_k={cfg.TopK}, auto_play={cfg.AutoPlay})");
 
-        // Load vocabulary (and aliases.txt in the same folder) + no_downside_relics.txt
         string vocabPath = Path.Combine(BridgeConfig.ModDir, "vocab.txt");
         Vocab.Load(vocabPath);
         BridgeLog.Info($"Loaded Vocab ({Vocab.Count} entries, {Vocab.AliasIds.Count} aliases) from {vocabPath}");
@@ -35,10 +35,11 @@ public static class Entry
         RewardsFlow.LoadNoDownside(freeRelicsPath);
 
         _harmony = new Harmony("alphadefect.sts2bridge");
-        BridgePatches.Install(_harmony);
+        BridgePatches.Install(_harmony, cfg);
 
+        _nativeModels = new NativeModelManager(BridgeConfig.ModDir);
         _link = new BridgeLink(cfg);
-        _controller = new BridgeController(cfg, _link);
+        _controller = new BridgeController(cfg, _link, _nativeModels);
 
         AttachToSceneTree(_controller);
     }
@@ -80,14 +81,14 @@ public partial class BridgeController : Node
     readonly LiveSessionDriver _driver;
     readonly BridgeOverlay _overlay;
 
-    public BridgeController(BridgeConfig cfg, BridgeLink link)
+    public BridgeController(BridgeConfig cfg, BridgeLink link, NativeModelManager nativeModels)
     {
         _cfg = cfg;
         _link = link;
         Name = "AlphaDefectBridgeController";
         ProcessMode = ProcessModeEnum.Always;
 
-        _driver = new LiveSessionDriver(cfg, link);
+        _driver = new LiveSessionDriver(cfg, link, nativeModels);
         _overlay = new BridgeOverlay(cfg);
 
         _overlay.OnToggleMode += () =>
@@ -97,13 +98,25 @@ public partial class BridgeController : Node
         };
         _overlay.OnStepOnce += () =>
         {
-            BridgeLog.Info("Manual single-step requested (F9).");
+            BridgeLog.Info("Manual single-step requested.");
             _driver.RequestStepOnce();
         };
         _overlay.OnReconnect += () =>
         {
             BridgeLog.Info("Manual TCP reconnect requested (F10).");
             _link.Reconnect();
+        };
+
+        // Re-evaluate current decision if user switches inference backend live
+        string lastBackend = cfg.Backend;
+        cfg.Changed += () =>
+        {
+            if (cfg.Backend != lastBackend)
+            {
+                lastBackend = cfg.Backend;
+                if (cfg.Backend != "builtin") _link.Reconnect();
+                _driver.ForceReevaluate();
+            }
         };
     }
 
@@ -117,7 +130,8 @@ public partial class BridgeController : Node
     {
         _driver.Tick();
         _overlay.UpdateHud(
-            connected: _link.IsConnected,
+            tcpConnected: _link.IsConnected,
+            nativeStatus: _driver.NativeStatus,
             autoPlay: _driver.AutoPlay,
             decisionKind: _driver.ActiveDecisionKind,
             seq: _driver.ActiveSeq,

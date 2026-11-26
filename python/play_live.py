@@ -356,7 +356,7 @@ class LivePolicyServer:
                 changed = False
                 search_info = {"backend": "tree", "searched": False, "reason": f"error: {type(e).__name__}", "synced": False}
 
-        order = np.argsort(-probs)[: min(5, n)]
+        order = np.argsort(-probs)[: min(10, n)]
         top_k = [
             {
                 "index": int(i),
@@ -395,6 +395,7 @@ class LivePolicyServer:
             "changed": changed,
             "search_info": search_info,
             "ckpt_version": self.meta.get("version"),
+            "obs_format": self.meta.get("obs_format"),
             "infer_ms": infer_ms,
         }
 
@@ -457,6 +458,14 @@ def serve_client(conn: socket.socket, addr, server: LivePolicyServer, lock: thre
                     msg.get("mod_version"),
                     msg.get("obs_version"),
                 )
+                if msg.get("want_ack"):
+                    with lock:
+                        ack = {
+                            "type": "hello_ack",
+                            "ckpt_version": server.meta.get("version"),
+                            "obs_format": server.meta.get("obs_format"),
+                        }
+                    conn.sendall((json.dumps(ack) + "\n").encode("utf-8"))
             elif mtype == "run_info":
                 with lock:
                     server.handle_run_info(msg)

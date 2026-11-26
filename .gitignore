@@ -30,6 +30,9 @@ decompiled/
 *.onnx
 *.safetensors
 *.ckpt
+*.s2nn
+*.zip
+models/
 sim_search.on
 *.jsonl
 *.jsonl.gz

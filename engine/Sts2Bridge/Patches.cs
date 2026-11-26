@@ -36,8 +36,10 @@ internal static class BridgePatches
 
     static readonly ConditionalWeakTable<EventOption, HashSet<string>> OriginalEventOptionVarKeys = new();
 
-    public static void Install(Harmony h)
+    public static void Install(Harmony h, BridgeConfig cfg)
     {
+        ModMenuUi.Install(h, cfg);
+
         // 1. Known draw-pile top tracking (Regent / Fool / format 20+)
         try
         {

@@ -106,6 +106,7 @@ internal sealed class LiveSessionDriver
 
     readonly BridgeConfig _cfg;
     readonly BridgeLink _link;
+    readonly NativeModelManager _nativeModels;
     readonly RunSession _shimSession = new();
 
     RunState? _trackedRun;
@@ -134,30 +135,57 @@ internal sealed class LiveSessionDriver
     bool _stepOnceRequested;
     string? _statusNote;
 
-    public bool AutoPlay { get; set; }
+    public bool AutoPlay
+    {
+        get => _cfg.AutoPlay;
+        set
+        {
+            if (_cfg.AutoPlay != value)
+            {
+                _cfg.AutoPlay = value;
+                _cfg.SaveAndNotify();
+            }
+        }
+    }
     public string ActiveDecisionKind => _activeDecision?.Kind.ToString() ?? "";
     public int ActiveSeq => _activeSeq;
     public bool WaitingReply => _waitingReply;
     public PolicyReply? LatestReply => _latestReply;
     public string? StatusNote => _statusNote;
+    public string NativeStatus => _nativeModels.StatusText;
 
-    public LiveSessionDriver(BridgeConfig cfg, BridgeLink link)
+    public LiveSessionDriver(BridgeConfig cfg, BridgeLink link, NativeModelManager nativeModels)
     {
         _cfg = cfg;
         _link = link;
-        AutoPlay = cfg.AutoPlay;
+        _nativeModels = nativeModels;
     }
 
     public void RequestStepOnce() => _stepOnceRequested = true;
 
+    public void ForceReevaluate()
+    {
+        _activeDecision = null;
+        _currentSignature = null;
+        _waitingReply = false;
+    }
+
     public void Tick()
     {
-        // Drain incoming replies from play_live.py
+        // Drain incoming replies from both TCP play_live.py and built-in NativeModelManager
         while (_link.TryDequeueReply(out var reply))
         {
             if (reply != null && reply.Seq == _activeSeq)
             {
                 _latestReply = reply;
+                _waitingReply = false;
+            }
+        }
+        while (_nativeModels.TryDequeueReply(out var nReply))
+        {
+            if (nReply != null && nReply.Seq == _activeSeq)
+            {
+                _latestReply = nReply;
                 _waitingReply = false;
             }
         }
@@ -182,7 +210,7 @@ internal sealed class LiveSessionDriver
                 BridgeLog.Info($"Run ended (victory={victory}, act={state.CurrentActIndex + 1}, floor={state.TotalFloor}).");
             }
             _activeDecision = null;
-            _statusNote = (_shimSession.IsVictory ? "Run Victory!" : "Run Defeated");
+            _statusNote = (_shimSession.IsVictory ? "本局通关胜利!" : "本局已结束");
             return;
         }
 
@@ -206,7 +234,7 @@ internal sealed class LiveSessionDriver
             }
             else
             {
-                _statusNote = $"Ready: {autoDesc} (press F9 or click)";
+                _statusNote = $"就绪: {autoDesc} (按 F9 或点击执行)";
             }
             return;
         }
@@ -276,7 +304,7 @@ internal sealed class LiveSessionDriver
         _activeDecision = null;
         _currentSignature = null;
         _waitingReply = false;
-        _statusNote = "Main Menu (start a run)";
+        _statusNote = "主菜单待命 (进入任意角色对局自动启用)";
     }
 
     void EnsureRunSubscriptions(RunState state)
@@ -317,6 +345,7 @@ internal sealed class LiveSessionDriver
             string gm = state.GameMode.ToString();
             int asc = state.AscensionLevel;
             int lf = BridgePatches.LoadedFloor;
+            _nativeModels.PreloadCharacter(ch);
             _link.SendRunInfo(ch, asc, seed, gm, lf);
             BridgeLog.Info($"Sent run_info: character={ch}, ascension={asc}, seed={seed}, mode={gm}, loaded_floor={lf}");
         }
@@ -332,6 +361,17 @@ internal sealed class LiveSessionDriver
     {
         try
         {
+            var me = state.Players[0];
+            string ch = me.Character.Id.Entry;
+            bool useTcp = _cfg.Backend == "tcp" || (_cfg.Backend == "auto" && _link.IsConnected);
+
+            int? targetFormat = useTcp
+                ? (_link.ServerObsFormat ?? _nativeModels.GetObsFormatForCharacter(ch))
+                : _nativeModels.GetObsFormatForCharacter(ch);
+#if STS2_V0111
+            if (targetFormat is > 23) targetFormat = 23;
+#endif
+
             Observation.Privileged = false;
             Observation.FutureContent = false;
             Observation.Oracle = false;
@@ -339,21 +379,35 @@ internal sealed class LiveSessionDriver
             Observation.Stage = 0;
             Observation.BossPrev = 0;
             Observation.BossNext = 0;
+            Observation.FormatOverride = targetFormat;
 
             byte[] raw;
-            using (BridgePatches.StripMergedEventVars(d))
+            try
             {
-                var obs = Observation.Build(_shimSession, d, labels: true);
-                raw = obs.Serialize();
+                using (BridgePatches.StripMergedEventVars(d))
+                {
+                    var obs = Observation.Build(_shimSession, d, labels: true);
+                    raw = obs.Serialize();
+                }
+            }
+            finally
+            {
+                Observation.FormatOverride = null;
             }
 
-            var me = state.Players[0];
             var labels = d.Choices.Select(c => c.Label).ToList();
-            _link.SendDecision(seq, d.Kind.ToString(), me.Character.Id.Entry, state.CurrentActIndex, state.TotalFloor, labels, raw);
+            if (useTcp)
+            {
+                _link.SendDecision(seq, d.Kind.ToString(), ch, state.CurrentActIndex, state.TotalFloor, labels, raw);
+            }
+            else
+            {
+                _nativeModels.EnqueueInference(seq, ch, labels, raw);
+            }
         }
         catch (Exception e)
         {
-            BridgeLog.Error($"Failed to encode/send observation frame #{seq}: {e}");
+            BridgeLog.Error($"Failed to encode/dispatch observation frame #{seq}: {e}");
             _waitingReply = false;
         }
     }

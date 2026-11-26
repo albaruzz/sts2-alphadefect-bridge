@@ -5,20 +5,28 @@ namespace Sts2Bridge;
 
 /// <summary>
 /// Non-intrusive Godot CanvasLayer HUD overlay anchored in the top-right corner.
-/// MouseFilter is set to Ignore on every Control so clicks pass straight through to the game UI.
-/// Hotkeys:
-///   F8  - Toggle Auto-Play vs Advisory Mode
-///   F9  - Execute single recommended action (in Advisory Mode)
-///   F10 - Reconnect TCP link to play_live.py
-///   F7  - Show / Hide HUD overlay
+/// Non-button areas use MouseFilter = Ignore so normal gameplay clicks pass straight through,
+/// while the compact toolbar ([自动], [单步], [⚙ 选项]) and collapsible options drawer let players
+/// adjust Top-K candidate count, Auto-Play mode, action delay, and inference backend mid-run.
 /// </summary>
 public partial class BridgeOverlay : CanvasLayer
 {
     readonly BridgeConfig _cfg;
     PanelContainer? _panel;
     StyleBoxFlat? _style;
+    Button? _autoBtn;
+    Button? _stepBtn;
+    Button? _optToggleBtn;
+    VBoxContainer? _optDrawer;
+    HSlider? _topKSlider;
+    Label? _topKValLabel;
+    HSlider? _delaySlider;
+    Label? _delayValLabel;
+    Button? _backendBtn;
     Label? _label;
-    bool _visible = true;
+
+    bool _drawerOpen;
+    bool _syncingControls;
 
     public event Action? OnToggleMode;
     public event Action? OnStepOnce;
@@ -27,7 +35,6 @@ public partial class BridgeOverlay : CanvasLayer
     public BridgeOverlay(BridgeConfig cfg)
     {
         _cfg = cfg;
-        _visible = cfg.ShowOverlay;
         Name = "AlphaDefectBridgeOverlay";
         Layer = 120;
         ProcessMode = ProcessModeEnum.Always;
@@ -45,16 +52,16 @@ public partial class BridgeOverlay : CanvasLayer
 
         _style = new StyleBoxFlat
         {
-            BgColor = new Color(0.05f, 0.07f, 0.11f, 0.84f),
-            BorderColor = new Color(0.28f, 0.56f, 0.90f, 0.90f),
+            BgColor = new Color(0.05f, 0.07f, 0.11f, 0.86f),
+            BorderColor = new Color(0.28f, 0.56f, 0.90f, 0.92f),
             BorderWidthLeft = 2,
             BorderWidthTop = 2,
             BorderWidthRight = 2,
             BorderWidthBottom = 2,
-            CornerRadiusTopLeft = 6,
-            CornerRadiusTopRight = 6,
-            CornerRadiusBottomLeft = 6,
-            CornerRadiusBottomRight = 6,
+            CornerRadiusTopLeft = 7,
+            CornerRadiusTopRight = 7,
+            CornerRadiusBottomLeft = 7,
+            CornerRadiusBottomRight = 7,
             ContentMarginLeft = 12,
             ContentMarginRight = 12,
             ContentMarginTop = 8,
@@ -65,7 +72,7 @@ public partial class BridgeOverlay : CanvasLayer
         {
             Name = "HudPanel",
             MouseFilter = Control.MouseFilterEnum.Ignore,
-            Visible = _visible,
+            Visible = _cfg.ShowOverlay,
         };
         _panel.AddThemeStyleboxOverride("panel", _style);
         _panel.AnchorLeft = 1.0f;
@@ -75,21 +82,234 @@ public partial class BridgeOverlay : CanvasLayer
         _panel.GrowHorizontal = Control.GrowDirection.Begin;
         _panel.GrowVertical = Control.GrowDirection.End;
         _panel.OffsetRight = -16f;
-        _panel.OffsetTop = 74f;     // Below STS2 top bar (relics/potions/seed)
-        _panel.CustomMinimumSize = new Vector2(310f, 0f);
+        _panel.OffsetTop = 72f;
+        _panel.CustomMinimumSize = new Vector2(340f, 0f);
         root.AddChild(_panel);
 
+        var mainVBox = new VBoxContainer
+        {
+            Name = "HudMainVBox",
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+        };
+        mainVBox.AddThemeConstantOverride("separation", 6);
+        _panel.AddChild(mainVBox);
+
+        // Interactive mini-toolbar
+        var toolbar = new HBoxContainer
+        {
+            Name = "HudToolbar",
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+        };
+        toolbar.AddThemeConstantOverride("separation", 6);
+        mainVBox.AddChild(toolbar);
+
+        var titleLbl = new Label
+        {
+            Text = "AlphaDefect AI",
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+        };
+        BridgeFonts.ApplyFont(titleLbl, 14);
+        titleLbl.AddThemeColorOverride("font_color", new Color(0.98f, 0.85f, 0.42f, 1f));
+        toolbar.AddChild(titleLbl);
+
+        _autoBtn = MakeToolbarBtn("自动: 关");
+        _autoBtn.Pressed += () => OnToggleMode?.Invoke();
+        toolbar.AddChild(_autoBtn);
+
+        _stepBtn = MakeToolbarBtn("单步");
+        _stepBtn.Pressed += () => OnStepOnce?.Invoke();
+        toolbar.AddChild(_stepBtn);
+
+        _optToggleBtn = MakeToolbarBtn("⚙ 选项");
+        _optToggleBtn.Pressed += () =>
+        {
+            _drawerOpen = !_drawerOpen;
+            if (_optDrawer != null) _optDrawer.Visible = _drawerOpen;
+            _optToggleBtn.Text = _drawerOpen ? "⚙ 收起" : "⚙ 选项";
+        };
+        toolbar.AddChild(_optToggleBtn);
+
+        // Collapsible inline options drawer (adjust Top-K, Delay, Backend right inside combat!)
+        _optDrawer = BuildInlineDrawer();
+        _optDrawer.Visible = false;
+        mainVBox.AddChild(_optDrawer);
+
+        // Prediction & telemetry readout label (MouseFilter = Ignore so clicks pass through)
         _label = new Label
         {
             Name = "HudLabel",
             MouseFilter = Control.MouseFilterEnum.Ignore,
-            Text = "AlphaDefect Bridge Initializing...",
+            Text = "正在初始化 AlphaDefect AI 助手...",
         };
-        _label.AddThemeFontSizeOverride("font_size", 14);
+        BridgeFonts.ApplyFont(_label, 14);
         _label.AddThemeColorOverride("font_color", new Color(0.93f, 0.95f, 0.98f, 1.0f));
         _label.AddThemeColorOverride("font_outline_color", new Color(0f, 0f, 0f, 0.85f));
         _label.AddThemeConstantOverride("outline_size", 3);
-        _panel.AddChild(_label);
+        mainVBox.AddChild(_label);
+
+        _cfg.Changed += SyncControlsFromConfig;
+        SyncControlsFromConfig();
+    }
+
+    VBoxContainer BuildInlineDrawer()
+    {
+        var drawer = new VBoxContainer
+        {
+            Name = "InlineOptionsDrawer",
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+        };
+        drawer.AddThemeConstantOverride("separation", 5);
+
+        // Top-K slider row
+        var tkRow = new HBoxContainer { MouseFilter = Control.MouseFilterEnum.Ignore };
+        tkRow.AddThemeConstantOverride("separation", 5);
+        var tkTitle = new Label
+        {
+            Text = "候选数 Top-K:",
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+        };
+        BridgeFonts.ApplyFont(tkTitle, 13);
+        var tkMinus = MakeToolbarBtn("-");
+        _topKSlider = new HSlider
+        {
+            MinValue = 1,
+            MaxValue = 10,
+            Step = 1,
+            Value = _cfg.TopK,
+            CustomMinimumSize = new Vector2(105f, 20f),
+            SizeFlagsVertical = Control.SizeFlags.ShrinkCenter,
+            MouseFilter = Control.MouseFilterEnum.Stop,
+        };
+        var tkPlus = MakeToolbarBtn("+");
+        _topKValLabel = new Label
+        {
+            Text = $"Top-{_cfg.TopK}",
+            CustomMinimumSize = new Vector2(48f, 0f),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+        };
+        BridgeFonts.ApplyFont(_topKValLabel, 13);
+        _topKValLabel.AddThemeColorOverride("font_color", new Color(0.50f, 0.86f, 1.0f, 1f));
+
+        tkMinus.Pressed += () => { _cfg.TopK = Math.Max(1, _cfg.TopK - 1); _cfg.SaveAndNotify(); };
+        tkPlus.Pressed += () => { _cfg.TopK = Math.Min(10, _cfg.TopK + 1); _cfg.SaveAndNotify(); };
+        _topKSlider.ValueChanged += v =>
+        {
+            if (_syncingControls) return;
+            _cfg.TopK = (int)Math.Round(v);
+            _cfg.SaveAndNotify();
+        };
+
+        tkRow.AddChild(tkTitle);
+        tkRow.AddChild(tkMinus);
+        tkRow.AddChild(_topKSlider);
+        tkRow.AddChild(tkPlus);
+        tkRow.AddChild(_topKValLabel);
+        drawer.AddChild(tkRow);
+
+        // Delay slider row
+        var dlRow = new HBoxContainer { MouseFilter = Control.MouseFilterEnum.Ignore };
+        dlRow.AddThemeConstantOverride("separation", 5);
+        var dlTitle = new Label
+        {
+            Text = "自动延迟:",
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+        };
+        BridgeFonts.ApplyFont(dlTitle, 13);
+        var dlMinus = MakeToolbarBtn("-");
+        _delaySlider = new HSlider
+        {
+            MinValue = 50,
+            MaxValue = 1500,
+            Step = 50,
+            Value = _cfg.ActionDelayMs,
+            CustomMinimumSize = new Vector2(105f, 20f),
+            SizeFlagsVertical = Control.SizeFlags.ShrinkCenter,
+            MouseFilter = Control.MouseFilterEnum.Stop,
+        };
+        var dlPlus = MakeToolbarBtn("+");
+        _delayValLabel = new Label
+        {
+            Text = $"{_cfg.ActionDelayMs}ms",
+            CustomMinimumSize = new Vector2(48f, 0f),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+        };
+        BridgeFonts.ApplyFont(_delayValLabel, 13);
+        _delayValLabel.AddThemeColorOverride("font_color", new Color(0.50f, 0.86f, 1.0f, 1f));
+
+        dlMinus.Pressed += () => { _cfg.ActionDelayMs = Math.Max(50, _cfg.ActionDelayMs - 50); _cfg.SaveAndNotify(); };
+        dlPlus.Pressed += () => { _cfg.ActionDelayMs = Math.Min(1500, _cfg.ActionDelayMs + 50); _cfg.SaveAndNotify(); };
+        _delaySlider.ValueChanged += v =>
+        {
+            if (_syncingControls) return;
+            _cfg.ActionDelayMs = (int)(Math.Round(v / 50.0) * 50);
+            _cfg.SaveAndNotify();
+        };
+
+        dlRow.AddChild(dlTitle);
+        dlRow.AddChild(dlMinus);
+        dlRow.AddChild(_delaySlider);
+        dlRow.AddChild(dlPlus);
+        dlRow.AddChild(_delayValLabel);
+        drawer.AddChild(dlRow);
+
+        // Backend cycle row
+        var bkRow = new HBoxContainer { MouseFilter = Control.MouseFilterEnum.Ignore };
+        bkRow.AddThemeConstantOverride("separation", 5);
+        var bkTitle = new Label
+        {
+            Text = "推理引擎:",
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+        };
+        BridgeFonts.ApplyFont(bkTitle, 13);
+        _backendBtn = MakeToolbarBtn(_cfg.BackendDisplayLabel());
+        _backendBtn.Pressed += () => _cfg.CycleBackend();
+        bkRow.AddChild(bkTitle);
+        bkRow.AddChild(_backendBtn);
+        drawer.AddChild(bkRow);
+
+        return drawer;
+    }
+
+    void SyncControlsFromConfig()
+    {
+        if (!IsInsideTree()) return;
+        _syncingControls = true;
+        try
+        {
+            if (_panel != null) _panel.Visible = _cfg.ShowOverlay;
+            if (_autoBtn != null)
+            {
+                _autoBtn.Text = _cfg.AutoPlay ? "自动: 开" : "自动: 关";
+                _autoBtn.Modulate = _cfg.AutoPlay ? new Color(0.50f, 1.0f, 0.65f) : new Color(0.95f, 0.97f, 1.0f);
+            }
+            if (_topKSlider != null) _topKSlider.Value = _cfg.TopK;
+            if (_topKValLabel != null) _topKValLabel.Text = $"Top-{_cfg.TopK}";
+            if (_delaySlider != null) _delaySlider.Value = _cfg.ActionDelayMs;
+            if (_delayValLabel != null) _delayValLabel.Text = $"{_cfg.ActionDelayMs}ms";
+            if (_backendBtn != null) _backendBtn.Text = _cfg.BackendDisplayLabel();
+        }
+        finally
+        {
+            _syncingControls = false;
+        }
+    }
+
+    static Button MakeToolbarBtn(string text)
+    {
+        var btn = new Button
+        {
+            Text = text,
+            CustomMinimumSize = new Vector2(28f, 24f),
+            MouseFilter = Control.MouseFilterEnum.Stop,
+        };
+        BridgeFonts.ApplyFont(btn, 12);
+        return btn;
     }
 
     public override void _Input(InputEvent @event)
@@ -110,15 +330,16 @@ public partial class BridgeOverlay : CanvasLayer
                 GetViewport()?.SetInputAsHandled();
                 break;
             case Key.F7:
-                _visible = !_visible;
-                if (_panel != null) _panel.Visible = _visible;
+                _cfg.ShowOverlay = !_cfg.ShowOverlay;
+                _cfg.SaveAndNotify();
                 GetViewport()?.SetInputAsHandled();
                 break;
         }
     }
 
     public void UpdateHud(
-        bool connected,
+        bool tcpConnected,
+        string nativeStatus,
         bool autoPlay,
         string decisionKind,
         int seq,
@@ -127,68 +348,98 @@ public partial class BridgeOverlay : CanvasLayer
         string? statusNote)
     {
         if (_panel == null || _label == null || _style == null) return;
-        _panel.Visible = _visible;
-        if (!_visible) return;
+        _panel.Visible = _cfg.ShowOverlay;
+        if (!_cfg.ShowOverlay) return;
 
-        // Border color indicates state: Gold = Tree Search active, Green = Auto-Play, Blue = Advisory, Gray/Red = Offline
-        if (!connected)
+        bool usingBuiltin = reply?.Source == "builtin" || (!tcpConnected && _cfg.Backend != "tcp");
+        bool activeReady = tcpConnected || (_cfg.Backend != "tcp" && !string.IsNullOrEmpty(nativeStatus));
+
+        // Border color: Gold = Tree Search, Green = Auto-Play, Blue = Advisory Ready, Red = Waiting for TCP
+        if (!activeReady)
             _style.BorderColor = new Color(0.75f, 0.28f, 0.28f, 0.88f);
         else if (reply?.Searched == true)
             _style.BorderColor = new Color(0.95f, 0.74f, 0.20f, 0.95f);
         else if (autoPlay)
             _style.BorderColor = new Color(0.22f, 0.82f, 0.48f, 0.92f);
         else
-            _style.BorderColor = new Color(0.28f, 0.56f, 0.90f, 0.90f);
+            _style.BorderColor = new Color(0.28f, 0.56f, 0.90f, 0.92f);
 
-        var sb = new StringBuilder(384);
-        string modeTag = autoPlay ? "AUTO-PLAY" : "ADVISORY";
-        string connTag = connected
-            ? (reply?.CkptVersion is { } v ? $"Connected (v{v})" : "Connected")
-            : $"Offline ({_cfg.Host}:{_cfg.Port})";
-        sb.AppendLine($"AlphaDefect [{modeTag}] · {connTag}");
+        var sb = new StringBuilder(512);
+        string modeTag = autoPlay ? "自动模式" : "辅助预测";
+        string engineTag;
+        if (tcpConnected && _cfg.Backend != "builtin")
+            engineTag = reply?.CkptVersion is { } tv ? $"外部服务 v{tv}" : "外部服务已连接";
+        else if (_cfg.Backend == "tcp")
+            engineTag = $"等待外部服务 ({_cfg.Host}:{_cfg.Port})";
+        else if (reply is { Source: "builtin" })
+            engineTag = $"内置模型: {reply.ModelCharacter} v{reply.CkptVersion}";
+        else if (!string.IsNullOrEmpty(nativeStatus))
+            engineTag = nativeStatus;
+        else
+            engineTag = "内置引擎待命";
+
+        sb.AppendLine($"[{modeTag}] · {engineTag}");
 
         if (!string.IsNullOrEmpty(statusNote))
-            sb.AppendLine($"State: {statusNote}");
+            sb.AppendLine($"状态: {statusNote}");
         else if (!string.IsNullOrEmpty(decisionKind))
-            sb.AppendLine($"Decision #{seq}: {decisionKind}{(waitingReply ? " (thinking...)" : "")}");
+            sb.AppendLine($"当前节点 #{seq}: {LocalizeDecision(decisionKind)}{(waitingReply ? " (计算中...)" : "")}");
         else
-            sb.AppendLine("State: Waiting for player decision...");
+            sb.AppendLine("状态: 等待玩家决策点...");
 
         if (reply != null && reply.Seq == seq)
         {
-            string winStr = reply.WinProb is { } wp ? $" | Win≈{wp * 100f:0.0}%" : "";
-            sb.AppendLine($"Recommend: [{reply.Action}] {reply.Label}");
-            sb.AppendLine($"Value: {reply.Value:+0.000;-0.000;0.000}{winStr} ({reply.InferMs:0.0}ms)");
+            sb.AppendLine($"下一步推荐: ▶ [{reply.Action + 1}] {Truncate(reply.Label, 32)} ({reply.Prob * 100f:0.1}%)");
+            string winStr = reply.WinProb is { } wp ? $"预计胜率 {wp * 100f:0.1}%  |  " : "";
+            sb.AppendLine($"局面评估: {winStr}价值 {reply.Value:+0.000;-0.000;0.000} ({reply.InferMs:0.1}ms)");
 
             if (reply.Searched)
             {
                 int sims = reply.SearchInfo?.Sims ?? 0;
                 float sms = reply.SearchInfo?.ElapsedMs ?? 0f;
-                string overrideTag = reply.Changed ? " [TREE OVERRIDE]" : " [TREE CONFIRMED]";
-                sb.AppendLine($"Search: {sims} sims in {sms:0}ms{overrideTag}");
-            }
-            else if (reply.SearchInfo is { Backend: not null } si && !string.IsNullOrEmpty(si.Reason) && si.Reason != "disabled")
-            {
-                string syncTag = si.Synced ? "mirror:ok" : "mirror:off";
-                sb.AppendLine($"Search: greedy ({si.Reason}, {syncTag})");
+                string overrideTag = reply.Changed ? " [树搜索改判!]" : " [树搜索确认]";
+                sb.AppendLine($"树搜索: {sims} 次模拟 ({sms:0}ms){overrideTag}");
             }
 
             if (reply.TopK.Count > 0)
             {
-                sb.AppendLine("Top Candidates:");
-                int take = Math.Min(3, reply.TopK.Count);
+                int take = Math.Clamp(_cfg.TopK, 1, reply.TopK.Count);
+                sb.AppendLine($"候选预测 (Top-{take} / 共 {reply.TopK.Count} 项):");
                 for (int i = 0; i < take; i++)
                 {
                     var c = reply.TopK[i];
                     string mark = c.Index == reply.Action ? "▶" : " ";
-                    sb.AppendLine($" {mark} {c.Prob * 100f,5:0.1}%  {Truncate(c.Label, 34)}");
+                    string bar = MakeProbBar(c.Prob, 8);
+                    sb.AppendLine($"{mark}[{c.Index + 1}] {bar} {c.Prob * 100f,5:0.1}%  {Truncate(c.Label, 26)}");
                 }
             }
         }
 
-        sb.Append("[F8] Auto/Adv  [F9] Step  [F10] Reconnect  [F7] Hide");
+        sb.Append("快捷键: [F8]自动/辅助  [F9]单步  [F7]显隐面板");
         _label.Text = sb.ToString();
     }
+
+    static string MakeProbBar(float prob, int width)
+    {
+        int filled = Math.Clamp((int)MathF.Round(prob * width), 0, width);
+        return new string('█', filled) + new string('░', width - filled);
+    }
+
+    static string LocalizeDecision(string kind) => kind switch
+    {
+        "Combat" => "战斗出牌",
+        "CardSelect" => "卡牌选择",
+        "CardReward" => "战后选牌",
+        "Bundle" => "卡包选择",
+        "Rewards" => "战利品领取",
+        "Event" => "事件抉择",
+        "RestSite" => "休息处",
+        "Shop" => "商人商店",
+        "Treasure" => "宝箱遗物",
+        "Minigame" => "水晶球占卜",
+        "Map" => "地图选路",
+        _ => kind,
+    };
 
     static string Truncate(string s, int maxLen) =>
         s.Length <= maxLen ? s : s[..(maxLen - 1)] + "…";
