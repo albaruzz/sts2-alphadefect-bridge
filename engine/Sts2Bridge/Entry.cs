@@ -8,6 +8,13 @@ namespace Sts2Bridge;
 /// <summary>
 /// STS2 Mod entry point discovered automatically by MegaCrit.Sts2.Core.Modding.ModManager
 /// via [ModInitializer(nameof(Init))] when Sts2Bridge.json + Sts2Bridge.dll are placed in mods/Sts2Bridge/.
+///
+/// IMPORTANT (Godot 4 + Microsoft.NET.Sdk):
+/// Without Godot.SourceGenerators, custom C# subclasses of Godot.Node / CanvasLayer do NOT get
+/// generated HasGodotClassMethod / InvokeGodotClassMethod tables, so Godot C++ never invokes
+/// overridden _Ready / _Process / _Input methods on custom subclasses. Therefore Sts2Bridge uses
+/// 100% pure composition of built-in Godot engine types (CanvasLayer, PanelContainer, Button, HSlider, Label)
+/// driven by SceneTree.ProcessFrame + Callable.From(...).CallDeferred() + Harmony Postfix on NGame._Input.
 /// </summary>
 [ModInitializer(nameof(Init))]
 public static class Entry
@@ -25,7 +32,7 @@ public static class Entry
 
         var cfg = BridgeConfig.Load();
         BridgeLog.Init(BridgeConfig.ModDir);
-        BridgeLog.Info($"Initializing Sts2Bridge v1.1.0 in {BridgeConfig.ModDir} (backend={cfg.Backend}, top_k={cfg.TopK}, auto_play={cfg.AutoPlay})");
+        BridgeLog.Info($"Initializing Sts2Bridge v1.1.1 in {BridgeConfig.ModDir} (log={BridgeLog.ActiveLogPath}, backend={cfg.Backend}, top_k={cfg.TopK}, auto_play={cfg.AutoPlay})");
 
         string vocabPath = Path.Combine(BridgeConfig.ModDir, "vocab.txt");
         Vocab.Load(vocabPath);
@@ -44,50 +51,57 @@ public static class Entry
         AttachToSceneTree(_controller);
     }
 
+    internal static void OnGameInput(InputEvent inputEvent)
+    {
+        _controller?.HandleInput(inputEvent);
+    }
+
     static void AttachToSceneTree(BridgeController controller)
     {
-        if (Engine.GetMainLoop() is SceneTree tree && tree.Root != null)
+        if (Engine.GetMainLoop() is SceneTree)
         {
-            tree.Root.CallDeferred(Node.MethodName.AddChild, controller);
-            BridgeLog.Info("Scheduled BridgeController attachment onto SceneTree.Root.");
+            Callable.From(controller.AttachOnMainThread).CallDeferred();
+            BridgeLog.Info("Scheduled BridgeController.AttachOnMainThread via Callable.CallDeferred().");
         }
         else
         {
-            BridgeLog.Warn("SceneTree.Root not ready during Init; scheduling background deferred attach.");
+            BridgeLog.Warn("SceneTree not ready during Init; polling in background task.");
             Task.Run(async () =>
             {
                 for (int i = 0; i < 200; i++)
                 {
                     await Task.Delay(50);
-                    if (Engine.GetMainLoop() is SceneTree st && st.Root != null)
+                    if (Engine.GetMainLoop() is SceneTree)
                     {
-                        st.Root.CallDeferred(Node.MethodName.AddChild, controller);
-                        BridgeLog.Info("Attached BridgeController onto SceneTree.Root.");
+                        Callable.From(controller.AttachOnMainThread).CallDeferred();
+                        BridgeLog.Info("Scheduled BridgeController.AttachOnMainThread after SceneTree became ready.");
                         return;
                     }
                 }
+                BridgeLog.Error("Timed out waiting for Engine.GetMainLoop() SceneTree.");
             });
         }
     }
 }
 
 /// <summary>
-/// Main-thread Godot Node driving LiveSessionDriver and BridgeOverlay every _Process frame.
+/// Pure-composition main-thread controller driving LiveSessionDriver and BridgeOverlay via SceneTree.ProcessFrame.
+/// Does NOT subclass Godot.Node so it works reliably without Godot.SourceGenerators on macOS/Windows/Linux.
 /// </summary>
-public partial class BridgeController : Node
+public sealed class BridgeController
 {
     readonly BridgeConfig _cfg;
     readonly BridgeLink _link;
     readonly LiveSessionDriver _driver;
     readonly BridgeOverlay _overlay;
+    SceneTree? _tree;
+    bool _attached;
+    bool _loggedFirstTick;
 
     public BridgeController(BridgeConfig cfg, BridgeLink link, NativeModelManager nativeModels)
     {
         _cfg = cfg;
         _link = link;
-        Name = "AlphaDefectBridgeController";
-        ProcessMode = ProcessModeEnum.Always;
-
         _driver = new LiveSessionDriver(cfg, link, nativeModels);
         _overlay = new BridgeOverlay(cfg);
 
@@ -107,7 +121,6 @@ public partial class BridgeController : Node
             _link.Reconnect();
         };
 
-        // Re-evaluate current decision if user switches inference backend live
         string lastBackend = cfg.Backend;
         cfg.Changed += () =>
         {
@@ -120,28 +133,66 @@ public partial class BridgeController : Node
         };
     }
 
-    public override void _Ready()
+    public void AttachOnMainThread()
     {
-        AddChild(_overlay);
-        BridgeLog.Info("BridgeController _Ready on Godot main thread (F8=Auto/Advisory, F9=Step, F10=Reconnect, F7=Hide HUD).");
+        if (_attached) return;
+        try
+        {
+            if (Engine.GetMainLoop() is not SceneTree tree || tree.Root == null)
+            {
+                BridgeLog.Warn("AttachOnMainThread called before SceneTree.Root was ready; retrying next frame.");
+                Callable.From(AttachOnMainThread).CallDeferred();
+                return;
+            }
+
+            _attached = true;
+            _tree = tree;
+            _overlay.Mount(tree.Root);
+            tree.ProcessFrame += OnProcessFrame;
+            BridgeLog.Info("BridgeController mounted HUD CanvasLayer onto SceneTree.Root and subscribed to SceneTree.ProcessFrame.");
+        }
+        catch (Exception e)
+        {
+            BridgeLog.Error($"AttachOnMainThread failed: {e}");
+        }
     }
 
-    public override void _Process(double delta)
+    public void HandleInput(InputEvent inputEvent)
     {
-        _driver.Tick();
-        _overlay.UpdateHud(
-            tcpConnected: _link.IsConnected,
-            nativeStatus: _driver.NativeStatus,
-            autoPlay: _driver.AutoPlay,
-            decisionKind: _driver.ActiveDecisionKind,
-            seq: _driver.ActiveSeq,
-            waitingReply: _driver.WaitingReply,
-            reply: _driver.LatestReply,
-            statusNote: _driver.StatusNote);
+        if (!_attached) return;
+        try
+        {
+            _overlay.HandleInput(inputEvent, _tree?.Root);
+        }
+        catch (Exception e)
+        {
+            BridgeLog.Warn($"HandleInput error: {e.Message}");
+        }
     }
 
-    public override void _ExitTree()
+    void OnProcessFrame()
     {
-        _link.Dispose();
+        try
+        {
+            if (!_loggedFirstTick)
+            {
+                _loggedFirstTick = true;
+                BridgeLog.Info("First SceneTree.ProcessFrame tick received; HUD & LiveSessionDriver active.");
+            }
+            _driver.Tick();
+            _overlay.UpdateHud(
+                tcpConnected: _link.IsConnected,
+                nativeStatus: _driver.NativeStatus,
+                autoPlay: _driver.AutoPlay,
+                decisionKind: _driver.ActiveDecisionKind,
+                seq: _driver.ActiveSeq,
+                waitingReply: _driver.WaitingReply,
+                reply: _driver.LatestReply,
+                statusNote: _driver.StatusNote);
+        }
+        catch (Exception e)
+        {
+            BridgeLog.Error($"OnProcessFrame exception: {e}");
+        }
     }
 }

@@ -4,19 +4,20 @@ using Godot;
 namespace Sts2Bridge;
 
 /// <summary>
-/// Non-intrusive Godot CanvasLayer HUD overlay anchored in the top-right corner.
-/// Non-button areas use MouseFilter = Ignore so normal gameplay clicks pass straight through,
-/// while the compact toolbar ([自动], [单步], [⚙ 选项]) and collapsible options drawer let players
-/// adjust Top-K candidate count, Auto-Play mode, action delay, and inference backend mid-run.
+/// Non-intrusive Godot HUD overlay anchored in the top-right corner, built via 100% pure composition
+/// of built-in Godot engine controls (CanvasLayer + Control + PanelContainer + VBoxContainer + Button + HSlider + Label)
+/// so it works without Godot.SourceGenerators across macOS (arm64/x86_64), Windows, and Linux.
 /// </summary>
-public partial class BridgeOverlay : CanvasLayer
+public sealed class BridgeOverlay
 {
     readonly BridgeConfig _cfg;
+    CanvasLayer? _canvas;
     PanelContainer? _panel;
     StyleBoxFlat? _style;
     Button? _autoBtn;
     Button? _stepBtn;
     Button? _optToggleBtn;
+    Button? _collapseBtn;
     VBoxContainer? _optDrawer;
     HSlider? _topKSlider;
     Label? _topKValLabel;
@@ -26,6 +27,7 @@ public partial class BridgeOverlay : CanvasLayer
     Label? _label;
 
     bool _drawerOpen;
+    bool _collapsed;
     bool _syncingControls;
 
     public event Action? OnToggleMode;
@@ -35,24 +37,30 @@ public partial class BridgeOverlay : CanvasLayer
     public BridgeOverlay(BridgeConfig cfg)
     {
         _cfg = cfg;
-        Name = "AlphaDefectBridgeOverlay";
-        Layer = 120;
-        ProcessMode = ProcessModeEnum.Always;
     }
 
-    public override void _Ready()
+    public void Mount(Window rootWindow)
     {
+        if (_canvas != null) return;
+
+        _canvas = new CanvasLayer
+        {
+            Name = "AlphaDefectBridgeOverlay",
+            Layer = 120,
+            ProcessMode = Node.ProcessModeEnum.Always,
+        };
+
         var root = new Control
         {
             Name = "OverlayRoot",
             MouseFilter = Control.MouseFilterEnum.Ignore,
         };
         root.SetAnchorsPreset(Control.LayoutPreset.FullRect);
-        AddChild(root);
+        _canvas.AddChild(root);
 
         _style = new StyleBoxFlat
         {
-            BgColor = new Color(0.05f, 0.07f, 0.11f, 0.86f),
+            BgColor = new Color(0.05f, 0.07f, 0.11f, 0.88f),
             BorderColor = new Color(0.28f, 0.56f, 0.90f, 0.92f),
             BorderWidthLeft = 2,
             BorderWidthTop = 2,
@@ -94,7 +102,7 @@ public partial class BridgeOverlay : CanvasLayer
         mainVBox.AddThemeConstantOverride("separation", 6);
         _panel.AddChild(mainVBox);
 
-        // Interactive mini-toolbar
+        // Interactive mini-toolbar (100% mouse-operable for macOS TouchBar/Fn-less keyboards too!)
         var toolbar = new HBoxContainer
         {
             Name = "HudToolbar",
@@ -125,10 +133,31 @@ public partial class BridgeOverlay : CanvasLayer
         _optToggleBtn.Pressed += () =>
         {
             _drawerOpen = !_drawerOpen;
+            if (_drawerOpen && _collapsed)
+            {
+                _collapsed = false;
+                if (_label != null) _label.Visible = true;
+                if (_collapseBtn != null) _collapseBtn.Text = "—";
+            }
             if (_optDrawer != null) _optDrawer.Visible = _drawerOpen;
             _optToggleBtn.Text = _drawerOpen ? "⚙ 收起" : "⚙ 选项";
         };
         toolbar.AddChild(_optToggleBtn);
+
+        _collapseBtn = MakeToolbarBtn("—");
+        _collapseBtn.Pressed += () =>
+        {
+            _collapsed = !_collapsed;
+            if (_label != null) _label.Visible = !_collapsed;
+            if (_collapsed && _optDrawer != null)
+            {
+                _drawerOpen = false;
+                _optDrawer.Visible = false;
+                if (_optToggleBtn != null) _optToggleBtn.Text = "⚙ 选项";
+            }
+            _collapseBtn.Text = _collapsed ? "展开" : "—";
+        };
+        toolbar.AddChild(_collapseBtn);
 
         // Collapsible inline options drawer (adjust Top-K, Delay, Backend right inside combat!)
         _optDrawer = BuildInlineDrawer();
@@ -147,6 +176,8 @@ public partial class BridgeOverlay : CanvasLayer
         _label.AddThemeColorOverride("font_outline_color", new Color(0f, 0f, 0f, 0.85f));
         _label.AddThemeConstantOverride("outline_size", 3);
         mainVBox.AddChild(_label);
+
+        rootWindow.AddChild(_canvas);
 
         _cfg.Changed += SyncControlsFromConfig;
         SyncControlsFromConfig();
@@ -278,7 +309,7 @@ public partial class BridgeOverlay : CanvasLayer
 
     void SyncControlsFromConfig()
     {
-        if (!IsInsideTree()) return;
+        if (_canvas == null || !_canvas.IsInsideTree()) return;
         _syncingControls = true;
         try
         {
@@ -312,27 +343,27 @@ public partial class BridgeOverlay : CanvasLayer
         return btn;
     }
 
-    public override void _Input(InputEvent @event)
+    public void HandleInput(InputEvent @event, Viewport? viewport)
     {
         if (@event is not InputEventKey { Pressed: true, Echo: false } key) return;
         switch (key.Keycode)
         {
             case Key.F8:
                 OnToggleMode?.Invoke();
-                GetViewport()?.SetInputAsHandled();
+                viewport?.SetInputAsHandled();
                 break;
             case Key.F9:
                 OnStepOnce?.Invoke();
-                GetViewport()?.SetInputAsHandled();
+                viewport?.SetInputAsHandled();
                 break;
             case Key.F10:
                 OnReconnect?.Invoke();
-                GetViewport()?.SetInputAsHandled();
+                viewport?.SetInputAsHandled();
                 break;
             case Key.F7:
                 _cfg.ShowOverlay = !_cfg.ShowOverlay;
                 _cfg.SaveAndNotify();
-                GetViewport()?.SetInputAsHandled();
+                viewport?.SetInputAsHandled();
                 break;
         }
     }
@@ -349,9 +380,8 @@ public partial class BridgeOverlay : CanvasLayer
     {
         if (_panel == null || _label == null || _style == null) return;
         _panel.Visible = _cfg.ShowOverlay;
-        if (!_cfg.ShowOverlay) return;
+        if (!_cfg.ShowOverlay || _collapsed) return;
 
-        bool usingBuiltin = reply?.Source == "builtin" || (!tcpConnected && _cfg.Backend != "tcp");
         bool activeReady = tcpConnected || (_cfg.Backend != "tcp" && !string.IsNullOrEmpty(nativeStatus));
 
         // Border color: Gold = Tree Search, Green = Auto-Play, Blue = Advisory Ready, Red = Waiting for TCP
@@ -415,7 +445,7 @@ public partial class BridgeOverlay : CanvasLayer
             }
         }
 
-        sb.Append("快捷键: [F8]自动/辅助  [F9]单步  [F7]显隐面板");
+        sb.Append("快捷键: [F8]自动  [F9]单步  [F7]显隐 (Mac需按Fn)");
         _label.Text = sb.ToString();
     }
 

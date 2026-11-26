@@ -1,11 +1,13 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using Godot;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.CardSelection;
 using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Commands;
 using MegaCrit.Sts2.Core.Events;
 using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Nodes.Combat;
 using MegaCrit.Sts2.Core.Nodes.Events;
 using MegaCrit.Sts2.Core.Rooms;
@@ -102,11 +104,16 @@ internal static class BridgePatches
         if (AccessTools.Method(typeof(RunManager), nameof(RunManager.CleanUp)) is { } cleanUp)
             h.Patch(cleanUp, prefix: Own(nameof(BeforeRunCleanUp)));
 
+        if (AccessTools.Method(typeof(NGame), nameof(NGame._Input)) is { } gameInput)
+            h.Patch(gameInput, postfix: Own(nameof(AfterGameInput)));
+
         CombatManager.Instance.CombatWon += OnCombatWon;
     }
 
     static HarmonyMethod Own(string name) =>
         new(typeof(BridgePatches).GetMethod(name, BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public)!);
+
+    static void AfterGameInput(InputEvent inputEvent) => Entry.OnGameInput(inputEvent);
 
     static void OnCombatWon(CombatRoom _) => UiFlows.CombatsWon++;
 

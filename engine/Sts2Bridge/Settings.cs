@@ -91,8 +91,17 @@ public sealed class BridgeConfig
         try
         {
             Normalize();
+            string json = JsonSerializer.Serialize(this, SaveJsonOpts);
             string cfgPath = Path.Combine(ModDir, "bridge_config.json");
-            File.WriteAllText(cfgPath, JsonSerializer.Serialize(this, SaveJsonOpts));
+            try
+            {
+                File.WriteAllText(cfgPath, json);
+            }
+            catch
+            {
+                string userCfg = Path.Combine(Godot.OS.GetUserDataDir(), "sts2_bridge_config.json");
+                File.WriteAllText(userCfg, json);
+            }
         }
         catch (Exception e)
         {
@@ -108,16 +117,21 @@ public sealed class BridgeConfig
 
         var cfg = new BridgeConfig();
         var cfgPath = Path.Combine(ModDir, "bridge_config.json");
-        if (File.Exists(cfgPath))
+        string userCfgPath = "";
+        try { userCfgPath = Path.Combine(Godot.OS.GetUserDataDir(), "sts2_bridge_config.json"); } catch { }
+        string loadPath = (!string.IsNullOrEmpty(userCfgPath) && File.Exists(userCfgPath) && !File.Exists(cfgPath))
+            ? userCfgPath
+            : cfgPath;
+        if (File.Exists(loadPath))
         {
             try
             {
-                var loaded = JsonSerializer.Deserialize<BridgeConfig>(File.ReadAllText(cfgPath));
+                var loaded = JsonSerializer.Deserialize<BridgeConfig>(File.ReadAllText(loadPath));
                 if (loaded != null) cfg = loaded;
             }
             catch (Exception e)
             {
-                BridgeLog.Warn($"Failed to parse {cfgPath}: {e.Message}; using defaults.");
+                BridgeLog.Warn($"Failed to parse {loadPath}: {e.Message}; using defaults.");
             }
         }
 
@@ -143,10 +157,23 @@ internal static class BridgeLog
 {
     static readonly object Sync = new();
     static string? _logPath;
+    static string? _userLogPath;
+
+    public static string ActiveLogPath => _userLogPath ?? _logPath ?? "";
 
     public static void Init(string modDir)
     {
         _logPath = Path.Combine(modDir, "sts2_bridge.log");
+        try
+        {
+            string udir = Godot.OS.GetUserDataDir();
+            if (!string.IsNullOrEmpty(udir))
+            {
+                Directory.CreateDirectory(udir);
+                _userLogPath = Path.Combine(udir, "sts2_bridge.log");
+            }
+        }
+        catch { }
     }
 
     public static void Info(string msg) => Write("INFO", msg);
@@ -158,10 +185,16 @@ internal static class BridgeLog
         string line = $"[{DateTime.Now:HH:mm:ss.fff}] [Sts2Bridge/{level}] {msg}";
         Console.Error.WriteLine(line);
         try { Godot.GD.Print(line); } catch { }
-        if (_logPath == null) return;
         lock (Sync)
         {
-            try { File.AppendAllText(_logPath, line + Environment.NewLine); } catch { }
+            if (_logPath != null)
+            {
+                try { File.AppendAllText(_logPath, line + Environment.NewLine); } catch { }
+            }
+            if (_userLogPath != null && !string.Equals(_userLogPath, _logPath, StringComparison.Ordinal))
+            {
+                try { File.AppendAllText(_userLogPath, line + Environment.NewLine); } catch { }
+            }
         }
     }
 }
