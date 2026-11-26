@@ -1,0 +1,26 @@
+<Project>
+  <!--
+    Single source of truth for target Slay the Spire 2 game version: engine/game_version.txt (default v0.114.0).
+    Override on the command line for earlier builds or custom Steam install directories:
+      dotnet build -c Release -p:Sts2GameVersion=v0.114.0 -p:Sts2GameDir="/path/to/Slay the Spire 2/data_sts2_windows_x86_64"
+      dotnet build -c Release -p:Sts2GameVersion=v0.113.1 -p:Sts2GameDir="/path/to/game/v0.113.1"
+      dotnet build -c Release -p:Sts2GameVersion=v0.111.0 -p:Sts2GameDir="/path/to/game/v0.111.0"
+  -->
+  <PropertyGroup>
+    <Sts2GameVersion Condition="'$(Sts2GameVersion)' == '' and Exists('$(MSBuildThisFileDirectory)game_version.txt')">$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)game_version.txt').Trim())</Sts2GameVersion>
+    <Sts2GameVersion Condition="'$(Sts2GameVersion)' == ''">v0.114.0</Sts2GameVersion>
+    <Sts2GameDir Condition="'$(Sts2GameDir)' == '' and '$(HOME)' != ''">$(HOME)/.local/share/sls2/game/$(Sts2GameVersion)</Sts2GameDir>
+    <Sts2ObsEngineDir>$(MSBuildThisFileDirectory)Sts2Headless/Engine</Sts2ObsEngineDir>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="$(Sts2GameVersion.StartsWith('v0.111')) or $(Sts2GameVersion.StartsWith('v0.110')) or $(Sts2GameVersion.StartsWith('v0.10'))">
+    <DefineConstants>$(DefineConstants);STS2_V0111</DefineConstants>
+    <Sts2ObsEngineDir>$(MSBuildThisFileDirectory)Sts2Headless/Engine.v0111</Sts2ObsEngineDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="$(Sts2GameVersion.StartsWith('v0.112')) or $(Sts2GameVersion.StartsWith('v0.113'))">
+    <DefineConstants>$(DefineConstants);STS2_V0113</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="!$(Sts2GameVersion.StartsWith('v0.111')) and !$(Sts2GameVersion.StartsWith('v0.110')) and !$(Sts2GameVersion.StartsWith('v0.10')) and !$(Sts2GameVersion.StartsWith('v0.112')) and !$(Sts2GameVersion.StartsWith('v0.113'))">
+    <DefineConstants>$(DefineConstants);STS2_V0114</DefineConstants>
+  </PropertyGroup>
+</Project>

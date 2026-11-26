@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <OutputType>Library</OutputType>
+    <AssemblyName>Sts2Bridge</AssemblyName>
+    <RootNamespace>Sts2Bridge</RootNamespace>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Sts2GameDir Condition="'$(Sts2GameDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2\data_sts2_windows_x86_64</Sts2GameDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Compile against the user's local Slay the Spire 2 installation; never copy proprietary DLLs to output -->
+    <Reference Include="sts2">
+      <HintPath>$(Sts2GameDir)/sts2.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="GodotSharp">
+      <HintPath>$(Sts2GameDir)/GodotSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(Sts2GameDir)/0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Shared AlphaDefect MIT core files (Obs/**, Compat/**, ObservationOracle.cs are auto-linked by Directory.Build.targets) -->
+    <Compile Include="../Sts2Headless/Engine/Decision.cs" Link="Shared/Decision.cs" />
+    <Compile Include="../Sts2Headless/Engine/Vocab.cs" Link="Shared/Vocab.cs" />
+    <Compile Include="$(Sts2ObsEngineDir)/Catalog.cs" Link="Shared/Catalog.cs" />
+    <Compile Include="$(Sts2ObsEngineDir)/Observation.cs" Link="Shared/Observation.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Bundle mod manifest, default config, vocabulary, aliases, and no-downside relic list alongside Sts2Bridge.dll -->
+    <None Include="Sts2Bridge.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="bridge_config.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../catalog/vocab.txt" Link="vocab.txt" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../catalog/aliases.txt" Link="aliases.txt" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../catalog/no_downside_relics.txt" Link="no_downside_relics.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

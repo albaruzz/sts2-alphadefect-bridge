@@ -1,0 +1,12 @@
+<Project>
+  <!--
+    Sts2Bridge shares the exact MIT observation encoder (Observation + Obs/** + Compat/** + ObservationOracle)
+    with AlphaDefect's Sts2Headless so live real-game frames are bit-compatible with headless training & search.
+  -->
+  <ItemGroup Condition="'$(MSBuildProjectName)' == 'Sts2Bridge'">
+    <Compile Include="$(Sts2ObsEngineDir)/Obs/**/*.cs" LinkBase="Shared/Obs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Sts2Headless/Engine/Compat/**/*.cs" LinkBase="Shared/Compat" />
+    <Compile Remove="$(Sts2ObsEngineDir)/ObservationOracle.cs" />
+    <Compile Include="$(Sts2ObsEngineDir)/ObservationOracle.cs" Link="Shared/ObservationOracle.cs" />
+  </ItemGroup>
+</Project>

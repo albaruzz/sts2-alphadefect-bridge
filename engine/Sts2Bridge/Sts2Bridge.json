@@ -1,0 +1,10 @@
+{
+  "id": "Sts2Bridge",
+  "name": "AlphaDefect Live Bridge",
+  "author": "AlphaDefect-Public & Kurisu934",
+  "description": "Live client bridge mod (Advisory HUD + Auto-Play + Boss/Elite Tree Search) for AlphaDefect-Public in Slay the Spire 2.",
+  "version": "1.0.0",
+  "has_pck": false,
+  "has_dll": true,
+  "affects_gameplay": true
+}
