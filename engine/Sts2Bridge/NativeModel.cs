@@ -1641,7 +1641,9 @@ public sealed class NativeModelManager
     readonly ConcurrentQueue<PolicyReply> _replyQueue = new();
 
     volatile string _statusText = "";
+    volatile string _lastError = "";
     public string StatusText => _statusText;
+    public string LastError => _lastError;
 
     public NativeModelManager(string modDir)
     {
@@ -1731,12 +1733,18 @@ public sealed class NativeModelManager
             {
                 if (!_loaded.TryGetValue(key, out var model))
                     model = await EnsureLoading(key);
-                if (model == null) return;
+                if (model == null)
+                {
+                    _lastError = _statusText.Length > 0 ? _statusText : $"未能加载角色模型 ({key})";
+                    return;
+                }
+                _lastError = "";
                 var reply = model.Decide(seq, choicesCopy, rawFrame);
                 _replyQueue.Enqueue(reply);
             }
             catch (Exception e)
             {
+                _lastError = $"推理异常: {e.GetBaseException().Message}";
                 BridgeLog.Error($"NativeModel inference error on seq={seq}: {e}");
             }
         });

@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using Godot;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.CardSelection;
@@ -24,12 +25,14 @@ using MegaCrit.Sts2.Core.Nodes.Cards;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
 using MegaCrit.Sts2.Core.Nodes.Combat;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
+using MegaCrit.Sts2.Core.Nodes.Events;
 using MegaCrit.Sts2.Core.Nodes.Events.Custom;
 using MegaCrit.Sts2.Core.Nodes.Events.Custom.CrystalSphere;
 using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
 using MegaCrit.Sts2.Core.Nodes.Rewards;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
 using MegaCrit.Sts2.Core.Nodes.Screens;
+using MegaCrit.Sts2.Core.Nodes.Screens.Capstones;
 using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
 using MegaCrit.Sts2.Core.Nodes.Screens.GameOverScreen;
 using MegaCrit.Sts2.Core.Nodes.Screens.Map;
@@ -102,7 +105,14 @@ internal sealed class LiveSessionDriver
     static readonly MethodInfo? TreasurePickMethod = AccessTools.Method(typeof(NTreasureRoomRelicCollection), "PickRelic");
 
     static readonly FieldInfo? MapDictField = AccessTools.Field(typeof(NMapScreen), "_mapPointDictionary");
+    static readonly FieldInfo? MapBossNodeField = AccessTools.Field(typeof(NMapScreen), "_bossPointNode");
+    static readonly FieldInfo? MapSecondBossNodeField = AccessTools.Field(typeof(NMapScreen), "_secondBossPointNode");
+    static readonly FieldInfo? MapStartNodeField = AccessTools.Field(typeof(NMapScreen), "_startingPointNode");
+    static readonly FieldInfo? MapInputDisabledField = AccessTools.Field(typeof(NMapScreen), "_isInputDisabled");
+    static readonly MethodInfo? MapCancelStartAnimMethod = AccessTools.Method(typeof(NMapScreen), "TryCancelStartOfActAnim");
     static readonly FieldInfo? OverlayListField = AccessTools.Field(typeof(NOverlayStack), "_overlays");
+    static readonly FieldInfo? AncientDialogueHitboxField = AccessTools.Field(typeof(NAncientEventLayout), "_dialogueHitbox");
+    static readonly PropertyInfo? AncientLastLineProp = AccessTools.Property(typeof(NAncientEventLayout), "IsDialogueOnLastLine");
 
     readonly BridgeConfig _cfg;
     readonly BridgeLink _link;
@@ -134,6 +144,7 @@ internal sealed class LiveSessionDriver
     PolicyReply? _latestReply;
     bool _stepOnceRequested;
     string? _statusNote;
+    string? _encodeError;
 
     public bool AutoPlay
     {
@@ -222,10 +233,14 @@ internal sealed class LiveSessionDriver
         FakeScreens.CrystalSphere = null;
         _shimSession.Selecting = null;
         _shimSession.SelectedIndices = Array.Empty<int>();
+        _statusNote = null;
 
-        var poll = PollDecisionOrAutoStep(state, out var autoStep, out string? autoDesc);
-        if (autoStep != null)
+        var poll = PollDecisionOrAutoStep(state, out var autoStep, out string? autoDesc, out bool canExecuteNow);
+        if (poll == null && autoStep != null)
         {
+            _currentSignature = null;
+            _activeDecision = null;
+            _waitingReply = false;
             if (AutoPlay || _stepOnceRequested)
             {
                 _stepOnceRequested = false;
@@ -234,7 +249,7 @@ internal sealed class LiveSessionDriver
             }
             else
             {
-                _statusNote = $"就绪: {autoDesc} (按 F9 或点击执行)";
+                _statusNote = $"就绪: {autoDesc} (点[单步]或按F9执行)";
             }
             return;
         }
@@ -247,7 +262,6 @@ internal sealed class LiveSessionDriver
             return;
         }
 
-        _statusNote = null;
         string sig = ComputeSignature(state, poll);
         if (sig != _currentSignature)
         {
@@ -256,6 +270,7 @@ internal sealed class LiveSessionDriver
             _activeDecision = null;
             _latestReply = null;
             _waitingReply = false;
+            _encodeError = null;
             return;
         }
 
@@ -269,14 +284,30 @@ internal sealed class LiveSessionDriver
             _activeSeq = ++_seq;
             _latestReply = null;
             _waitingReply = true;
+            _encodeError = null;
             SendDecisionFrame(state, poll, _activeSeq);
+            if (_encodeError != null) _statusNote = _encodeError;
             return;
         }
 
         // Refresh active decision closures while keeping _activeSeq if state signature hasn't changed
         _activeDecision = poll;
+        if (_encodeError != null)
+            _statusNote = _encodeError;
+        else if (_cfg.Backend != "tcp" && !_link.IsConnected && !string.IsNullOrEmpty(_nativeModels.LastError))
+            _statusNote = _nativeModels.LastError;
 
-        if (_latestReply is { } rep && rep.Seq == _activeSeq && (AutoPlay || _stepOnceRequested))
+        // If a pre-choice UI gate is active (e.g. Neow/Ancient greeting dialogue or Act-start map scroll),
+        // advance the UI gate first when AutoPlay or Single-Step is requested while keeping the prediction visible!
+        if (!canExecuteNow && autoStep != null && (AutoPlay || _stepOnceRequested))
+        {
+            _stepOnceRequested = false;
+            ExecuteSafely(autoDesc ?? "pre-step", autoStep, incrementStep: false);
+            _cooldownUntilMs = now + (ulong)Math.Max(140, _cfg.ActionDelayMs / 2);
+            return;
+        }
+
+        if (canExecuteNow && _latestReply is { } rep && rep.Seq == _activeSeq && (AutoPlay || _stepOnceRequested))
         {
             _stepOnceRequested = false;
             int idx = rep.Action;
@@ -338,6 +369,8 @@ internal sealed class LiveSessionDriver
                 _attemptedRewards.Clear();
                 _currentSignature = null;
                 _activeDecision = null;
+                _encodeError = null;
+                BridgePatches.PendingEventOptionTask = null;
             }
             var me = state.Players[0];
             string ch = me.Character.Id.Entry;
@@ -407,6 +440,7 @@ internal sealed class LiveSessionDriver
         }
         catch (Exception e)
         {
+            _encodeError = $"观测编码失败: {e.GetBaseException().Message}";
             BridgeLog.Error($"Failed to encode/dispatch observation frame #{seq}: {e}");
             _waitingReply = false;
         }
@@ -431,18 +465,61 @@ internal sealed class LiveSessionDriver
     // Stabilization & Canonical Decision Enumeration (matching RunSession.cs)
     // -------------------------------------------------------------------------
 
-    Decision? PollDecisionOrAutoStep(RunState s, out Func<Task>? autoStep, out string? autoDesc)
+    Decision? PollDecisionOrAutoStep(RunState s, out Func<Task>? autoStep, out string? autoDesc, out bool canExecuteNow)
     {
         autoStep = null;
         autoDesc = null;
+        canExecuteNow = true;
 
         if (RunManager.Instance.ActionExecutor is { IsRunning: true })
             return null;
 
         var me = s.Players[0];
-        var topOverlay = NOverlayStack.Instance?.Peek();
 
-        // 1. Overlay screens take highest priority (CardSelect, CardReward, Bundle, Rewards, Minigame)
+        // 0. Capstone container (Player inspecting Deck / Compendium / Relics from top bar)
+        if (NCapstoneContainer.Instance is { InUse: true })
+        {
+            _statusNote = "正在查看顶栏界面 (关闭后恢复预测)";
+            return null;
+        }
+
+        // 1. Open Map Screen MUST be checked BEFORE NOverlayStack!
+        //    In STS2, opening NMapScreen after combat/rewards calls NOverlayStack.HideOverlays() WITHOUT removing
+        //    NRewardsScreen from NOverlayStack._overlays (StackIsCovered == true). Checking NOverlayStack first
+        //    caused Map route selection to be shadowed by the hidden NRewardsScreen!
+        if (NMapScreen.Instance is { IsOpen: true } mapScreen && mapScreen.IsVisibleInTree())
+        {
+            if (mapScreen.IsTraveling)
+            {
+                _statusNote = "正在前往目标节点...";
+                return null;
+            }
+            if (mapScreen.IsTravelEnabled)
+            {
+                bool inputDisabled = MapInputDisabledField?.GetValue(mapScreen) is true;
+                canExecuteNow = !inputDisabled;
+                if (inputDisabled) _statusNote = "地图展开中...";
+                return BuildMapDecision(s, me, mapScreen);
+            }
+            // Act-start map scroll animation (CurrentRoom is MapRoom while StartOfActAnim scrolls down)
+            if (s.CurrentRoom is MapRoom)
+            {
+                canExecuteNow = false;
+                _statusNote = "开幕地图滚动中 (可先查看路线推荐)";
+                autoDesc = "跳过地图滚动动画";
+                autoStep = () =>
+                {
+                    MapCancelStartAnimMethod?.Invoke(mapScreen, null);
+                    return Task.CompletedTask;
+                };
+                return BuildMapDecision(s, me, mapScreen);
+            }
+            _statusNote = "正在预览地图 (关闭地图返回当前房间决策)";
+            return null;
+        }
+
+        // 2. Visible Overlay screens (CardSelect, CardReward, Bundle, Rewards, Minigame)
+        var topOverlay = PeekVisibleOverlay();
         if (topOverlay != null)
         {
             switch (topOverlay)
@@ -460,16 +537,16 @@ internal sealed class LiveSessionDriver
                 case NCrystalSphereScreen sphereScreen:
                     return BuildCrystalSphereDecision(sphereScreen, out autoStep, out autoDesc);
                 default:
-                    // Inspect screen, pause menu, settings, etc. — wait while player is viewing
+                    _statusNote = "等待当前弹窗关闭...";
                     return null;
             }
         }
 
-        // 2. In-combat hand card selection (NPlayerHand.IsInCardSelection)
+        // 3. In-combat hand card selection (NPlayerHand.IsInCardSelection)
         if (CombatManager.Instance.IsInProgress && NPlayerHand.Instance is { IsInCardSelection: true } handSel)
             return BuildHandCardSelectDecision(s, handSel);
 
-        // 3. Active Combat Play Phase
+        // 4. Active Combat Play Phase
         if (CombatManager.Instance.IsInProgress)
             return BuildCombatDecision(me);
 
@@ -482,16 +559,10 @@ internal sealed class LiveSessionDriver
             _room = s.CurrentRoom;
             _roomLeft = _restChosen = _relicDecided = _shopInitialized = false;
             _failed.Clear();
+            BridgePatches.PendingEventOptionTask = null;
         }
 
-        // 4. Open Map Screen
-        if (NMapScreen.Instance is { IsOpen: true } mapScreen)
-        {
-            if (!mapScreen.IsTravelEnabled || mapScreen.IsTraveling) return null;
-            return BuildMapDecision(s, me, mapScreen);
-        }
-
-        // 5. Out-of-combat Rooms
+        // 5. Out-of-combat Rooms (Events incl. Neow/Ancients, RestSite, Shop, Treasure, MapRoom fallback)
         switch (s.CurrentRoom)
         {
             case EventRoom { CanonicalEvent: FakeMerchant } when !_roomLeft
@@ -506,12 +577,12 @@ internal sealed class LiveSessionDriver
                 {
                     if (NEventRoom.Instance != null)
                     {
-                        autoDesc = "Proceed from Event";
+                        autoDesc = "离开事件";
                         autoStep = () => NEventRoom.Proceed();
                     }
                     return null;
                 }
-                return BuildEventDecision(me, ev);
+                return BuildEventDecision(me, ev, out autoStep, out autoDesc, out canExecuteNow);
             }
 
             case RestSiteRoom:
@@ -528,6 +599,15 @@ internal sealed class LiveSessionDriver
                     return BuildMapDecision(s, me, ms);
                 return null;
         }
+    }
+
+    static IOverlayScreen? PeekVisibleOverlay()
+    {
+        if (NOverlayStack.Instance is not { } stack) return null;
+        if (!stack.IsVisibleInTree()) return null;
+        var top = stack.Peek();
+        if (top is CanvasItem ci && !ci.IsVisibleInTree()) return null;
+        return top;
     }
 
     Decision? BuildCombatDecision(Player me)
@@ -555,7 +635,7 @@ internal sealed class LiveSessionDriver
                 {
                     var card = c;
                     var target = t;
-                    d.Add(ActionKind.PlayCard, $"Play {c.Id.Entry}{TargetLabel(t)}", () =>
+                    d.Add(ActionKind.PlayCard, BridgeLocalize.PlayCard(c, t, cs), () =>
                     {
                         card.TryManualPlay(target);
                         return Task.CompletedTask;
@@ -572,7 +652,7 @@ internal sealed class LiveSessionDriver
                 {
                     var pot = p;
                     var target = t;
-                    d.Add(ActionKind.UsePotion, $"Use {p.Id.Entry}{TargetLabel(t)}", () =>
+                    d.Add(ActionKind.UsePotion, BridgeLocalize.UsePotion(p, t, cs), () =>
                     {
                         pot.EnqueueManualUse(target);
                         return Task.CompletedTask;
@@ -582,7 +662,7 @@ internal sealed class LiveSessionDriver
         }
 
         int turn = pcs.TurnNumber;
-        d.Add(ActionKind.EndTurn, "End Turn", () =>
+        d.Add(ActionKind.EndTurn, "结束回合", () =>
         {
             RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new EndPlayerTurnAction(me, turn));
             return Task.CompletedTask;
@@ -608,7 +688,7 @@ internal sealed class LiveSessionDriver
         for (int i = 0; i < cards.Count; i++)
         {
             var card = cards[i];
-            d.Add(ActionKind.SelectCard, "Pick " + card.Id.Entry, () =>
+            d.Add(ActionKind.SelectCard, BridgeLocalize.SelectCard(card, info, upgradeAny: false), () =>
             {
                 if (ChooseCardRowField?.GetValue(screen) is Node row)
                 {
@@ -625,7 +705,7 @@ internal sealed class LiveSessionDriver
 
         if (min == 0)
         {
-            d.Add(ActionKind.ConfirmSelection, "Skip", () =>
+            d.Add(ActionKind.ConfirmSelection, "跳过（不选卡牌）", () =>
             {
                 if (ChooseCardSkipBtnField?.GetValue(screen) is NClickableControl skipBtn)
                     skipBtn.ForceClick();
@@ -671,7 +751,7 @@ internal sealed class LiveSessionDriver
             if (selectedIndices.Contains(i)) continue;
             var card = cards[i];
             bool completesMax = selectedIndices.Count + 1 >= max;
-            d.Add(ActionKind.SelectCard, "Select " + card.Id.Entry, () =>
+            d.Add(ActionKind.SelectCard, BridgeLocalize.SelectCard(card, info, upgradeAny), () =>
             {
                 GridCardClickedMethod?.Invoke(screen, new object[] { card });
                 if (completesMax)
@@ -682,7 +762,7 @@ internal sealed class LiveSessionDriver
 
         if (selectedIndices.Count >= min)
         {
-            d.Add(ActionKind.ConfirmSelection, "Confirm", () =>
+            d.Add(ActionKind.ConfirmSelection, BridgeLocalize.ConfirmSelection(selectedIndices.Count, min), () =>
             {
                 TryClickGridPreviewOrConfirm(screen, previewOnly: false);
                 return Task.CompletedTask;
@@ -691,7 +771,7 @@ internal sealed class LiveSessionDriver
 
         if (cancel)
         {
-            d.Add(ActionKind.Leave, "Cancel", () =>
+            d.Add(ActionKind.Leave, "取消返回", () =>
             {
                 _cancelRoom = s.CurrentRoom;
                 if (AccessTools.Field(st, "_closeButton")?.GetValue(screen) is NClickableControl closeBtn)
@@ -771,7 +851,7 @@ internal sealed class LiveSessionDriver
             if (selectedIndices.Contains(i)) continue;
             var card = options[i];
             bool completesMax = selectedIndices.Count + 1 >= max;
-            d.Add(ActionKind.SelectCard, "Select " + card.Id.Entry, () =>
+            d.Add(ActionKind.SelectCard, BridgeLocalize.SelectCard(card, info, upgradeAny), () =>
             {
                 var holder = hand.GetCardHolder(card);
                 if (holder != null)
@@ -784,7 +864,7 @@ internal sealed class LiveSessionDriver
 
         if (selectedIndices.Count >= min)
         {
-            d.Add(ActionKind.ConfirmSelection, "Confirm", () =>
+            d.Add(ActionKind.ConfirmSelection, BridgeLocalize.ConfirmSelection(selectedIndices.Count, min), () =>
             {
                 if (HandConfirmBtnField?.GetValue(hand) is NClickableControl cbtn)
                     cbtn.ForceClick();
@@ -821,7 +901,7 @@ internal sealed class LiveSessionDriver
         for (int i = 0; i < cards.Count; i++)
         {
             var card = cards[i].Card;
-            d.Add(ActionKind.PickCardReward, "Pick " + card.Id.Entry, () =>
+            d.Add(ActionKind.PickCardReward, $"拿取卡牌「{BridgeLocalize.CardName(card)}」", () =>
             {
                 var holder = screen.GetCardHolder(card);
                 if (holder != null)
@@ -834,7 +914,7 @@ internal sealed class LiveSessionDriver
         {
             int altIdx = i;
             var alt = alts[i];
-            d.Add(ActionKind.CardRewardAlt, alt.OptionId, () =>
+            d.Add(ActionKind.CardRewardAlt, BridgeLocalize.CardRewardAlt(alt), () =>
             {
                 if (RewardsFlow.ActiveChoice is CardReward cr)
                     _attemptedRewards.Add(cr);
@@ -856,7 +936,7 @@ internal sealed class LiveSessionDriver
         {
             int idx = i;
             foreach (var c in bundles[i]) d.Shown.Add((c, i == 0 ? Zone.Pack1 : Zone.Pack2, 0));
-            d.Add(ActionKind.PickBundle, "Bundle " + string.Join("+", bundles[i].Select(c => c.Id.Entry)), () =>
+            d.Add(ActionKind.PickBundle, BridgeLocalize.Bundle(i, bundles[i]), () =>
             {
                 if (BundleRowField?.GetValue(screen) is Node row)
                 {
@@ -899,7 +979,8 @@ internal sealed class LiveSessionDriver
             var goldBtn = buttons.FirstOrDefault(b => b.Reward is GoldReward { SuccessfullySelected: false } && b.IsEnabled);
             if (goldBtn != null)
             {
-                autoDesc = "Claim Gold";
+                int amt = ((GoldReward)goldBtn.Reward!).Amount;
+                autoDesc = $"自动领取 {amt} 金币";
                 autoStep = () => { goldBtn.ForceClick(); return Task.CompletedTask; };
                 return null;
             }
@@ -911,7 +992,7 @@ internal sealed class LiveSessionDriver
                 && RewardsFlow.IsNoDownside(rr.Relic) && b.IsEnabled);
             if (freeRelicBtn != null)
             {
-                autoDesc = "Claim Relic " + ((RelicReward)freeRelicBtn.Reward!).Relic?.Id.Entry;
+                autoDesc = $"自动领取遗物「{BridgeLocalize.RelicName(((RelicReward)freeRelicBtn.Reward!).Relic)}」";
                 autoStep = () => { freeRelicBtn.ForceClick(); return Task.CompletedTask; };
                 return null;
             }
@@ -924,7 +1005,7 @@ internal sealed class LiveSessionDriver
         // Non-terminal rewards screen with nothing left -> auto-proceed
         if (!pr.IsTerminal && available.Count == 0 && RewardsProceedField?.GetValue(screen) is NClickableControl pbtn0 && pbtn0.IsEnabled)
         {
-            autoDesc = "Close Extra Rewards";
+            autoDesc = "关闭额外奖励栏";
             autoStep = () => { pbtn0.ForceClick(); return Task.CompletedTask; };
             return null;
         }
@@ -933,7 +1014,7 @@ internal sealed class LiveSessionDriver
         foreach (var r in available)
         {
             var reward = r;
-            d.Add(ActionKind.TakeReward, "Claim " + RewardLabel(r), () =>
+            d.Add(ActionKind.TakeReward, BridgeLocalize.Reward(r), () =>
             {
                 var btn = buttons.FirstOrDefault(b => ReferenceEquals(b.Reward, reward));
                 if (btn != null) btn.ForceClick();
@@ -947,7 +1028,7 @@ internal sealed class LiveSessionDriver
 
         if (!set.DisallowSkipping || available.Count == 0)
         {
-            d.Add(ActionKind.Leave, "Proceed", () =>
+            d.Add(ActionKind.Leave, "继续前进", () =>
             {
                 if (RewardsProceedField?.GetValue(screen) is NClickableControl pbtn)
                     pbtn.ForceClick();
@@ -978,7 +1059,7 @@ internal sealed class LiveSessionDriver
         {
             if (SphereProceedBtnField?.GetValue(screen) is NClickableControl pbtn && pbtn.IsVisibleInTree() && pbtn.IsEnabled)
             {
-                autoDesc = "Proceed from Crystal Sphere";
+                autoDesc = "完成占卜并离开";
                 autoStep = () => { pbtn.ForceClick(); return Task.CompletedTask; };
             }
             return null;
@@ -992,8 +1073,8 @@ internal sealed class LiveSessionDriver
             var cell = m.cells[x, y];
             if (!cell.IsHidden) continue;
             int cx = x, cy = y;
-            d.Add(ActionKind.MinigameCell, $"Small ({cx},{cy})", () => ClickSphereCell(screen, m, cell, big: false), f0: cx, f1: cy, f2: 0);
-            d.Add(ActionKind.MinigameCell, $"Big ({cx},{cy})", () => ClickSphereCell(screen, m, cell, big: true), f0: cx, f1: cy, f2: 1);
+            d.Add(ActionKind.MinigameCell, BridgeLocalize.MinigameCell(cx, cy, big: false), () => ClickSphereCell(screen, m, cell, big: false), f0: cx, f1: cy, f2: 0);
+            d.Add(ActionKind.MinigameCell, BridgeLocalize.MinigameCell(cx, cy, big: true), () => ClickSphereCell(screen, m, cell, big: true), f0: cx, f1: cy, f2: 1);
         }
         return d;
     }
@@ -1017,10 +1098,59 @@ internal sealed class LiveSessionDriver
         return m.CellClicked(targetCell);
     }
 
-    Decision? BuildEventDecision(Player me, EventModel ev)
+    Decision? BuildEventDecision(Player me, EventModel ev, out Func<Task>? autoStep, out string? autoDesc, out bool canExecuteNow)
     {
-        if (BridgePatches.PendingEventOptionTask is { IsCompleted: false }) return null;
-        if (NEventRoom.Instance == null) return null;
+        autoStep = null;
+        autoDesc = null;
+        canExecuteNow = true;
+
+        if (NEventRoom.Instance is not { } er) return null;
+
+        // Wait for NEventRoom.SetupLayout() (0.2s fade-in) so NEventOptionButton._Ready captures & binds LocString variables
+        var layout = er.Layout;
+        if (layout == null && er.CustomEventNode == null)
+        {
+            _statusNote = "正在加载事件选项...";
+            return null;
+        }
+
+        // If an option's async Task is genuinely still running (and no fresh enabled option buttons are waiting), hold off
+        if (BridgePatches.PendingEventOptionTask is { IsCompleted: false })
+        {
+            bool anyFreshBtn = layout != null && layout.OptionButtons.Any(b => !b.Option.IsLocked && b.IsVisibleInTree() && b.IsEnabled && !b.Option.WasChosen);
+            if (!anyFreshBtn)
+            {
+                _statusNote = "正在结算事件效果...";
+                return null;
+            }
+            BridgePatches.PendingEventOptionTask = null;
+        }
+
+        // Ancient / Neow opening event dialogue check:
+        // While NAncientEventLayout is still on dialogue lines (!unlockedButtonsReady), we STILL compute & display
+        // the AI's 3-blessing prediction immediately for Advisory mode, while wiring autoStep to click through dialogue!
+        if (layout is NAncientEventLayout ancientLayout)
+        {
+            bool unlockedButtonsReady = ancientLayout.OptionButtons.Any(b => !b.Option.IsLocked && b.IsVisibleInTree() && b.IsEnabled);
+            if (!unlockedButtonsReady)
+            {
+                canExecuteNow = false;
+                if (AncientDialogueHitboxField?.GetValue(ancientLayout) is NClickableControl hitbox && hitbox.IsVisibleInTree() && hitbox.IsEnabled)
+                {
+                    _statusNote = "点击对话框进入选遗物 (或点[单步]推进)";
+                    autoDesc = "推进先古对话";
+                    autoStep = () =>
+                    {
+                        hitbox.ForceClick();
+                        return Task.CompletedTask;
+                    };
+                }
+                else
+                {
+                    _statusNote = "先古对话过渡中...";
+                }
+            }
+        }
 
         var d = new Decision(DecisionKind.Event) { Context = ev.Id.Entry };
         var opts = ev.CurrentOptions;
@@ -1030,11 +1160,17 @@ internal sealed class LiveSessionDriver
             int k = i;
             var opt = opts[i];
             var tip = HoverObject(opt);
-            d.Add(ActionKind.EventOption, opt.TextKey, () =>
+            d.Add(ActionKind.EventOption, BridgeLocalize.EventOption(opt, me), () =>
             {
-                if (NEventRoom.Instance is { } er)
+                if (NEventRoom.Instance is { } roomUi)
                 {
-                    er.OptionButtonClicked(opt, k);
+                    var btn = roomUi.Layout?.OptionButtons.FirstOrDefault(b => ReferenceEquals(b.Option, opt) && b.IsEnabled);
+                    if (btn != null && btn.IsVisibleInTree())
+                    {
+                        btn.ForceClick();
+                        return Task.CompletedTask;
+                    }
+                    roomUi.OptionButtonClicked(opt, k);
                     return Task.CompletedTask;
                 }
                 if (opt.IsProceed) return opt.Chosen();
@@ -1057,7 +1193,7 @@ internal sealed class LiveSessionDriver
         {
             if (restUi.ProceedButton is { IsEnabled: true } pb && pb.IsVisibleInTree())
             {
-                autoDesc = "Proceed from Rest Site";
+                autoDesc = "离开休息处";
                 autoStep = () => { pb.ForceClick(); return Task.CompletedTask; };
             }
             return null;
@@ -1074,7 +1210,7 @@ internal sealed class LiveSessionDriver
             if (opts[i] is HealRestSiteOption && canSmith && RunSession.RestHealInfo(me) is { actual: 0, extra: 0 }) continue;
             int k = i;
             var opt = opts[i];
-            d.Add(ActionKind.RestOption, opt.OptionId, () =>
+            d.Add(ActionKind.RestOption, BridgeLocalize.RestOption(opt, me), () =>
             {
                 if (restUi.GetButtonForOption(opt) is { IsEnabled: true } btn)
                     btn.ForceClick();
@@ -1088,7 +1224,7 @@ internal sealed class LiveSessionDriver
         {
             if (restUi.ProceedButton is { IsEnabled: true } pb && pb.IsVisibleInTree())
             {
-                autoDesc = "Proceed from Rest Site";
+                autoDesc = "离开休息处";
                 autoStep = () => { _roomLeft = true; pb.ForceClick(); return Task.CompletedTask; };
             }
             return null;
@@ -1096,7 +1232,7 @@ internal sealed class LiveSessionDriver
 
         if (_restChosen)
         {
-            d.Add(ActionKind.Leave, "Leave", () =>
+            d.Add(ActionKind.Leave, "离开休息处", () =>
             {
                 _roomLeft = true;
                 if (restUi.ProceedButton is { IsEnabled: true } pb) pb.ForceClick();
@@ -1107,7 +1243,7 @@ internal sealed class LiveSessionDriver
         {
             if (restUi.ProceedButton is { IsEnabled: true } pb && pb.IsVisibleInTree())
             {
-                autoDesc = "Proceed from Rest Site";
+                autoDesc = "离开休息处";
                 autoStep = () => { _roomLeft = true; pb.ForceClick(); return Task.CompletedTask; };
             }
             return null;
@@ -1137,7 +1273,7 @@ internal sealed class LiveSessionDriver
         var d = new Decision(DecisionKind.Shop) { Context = $"Gold {me.Gold}" };
         AddShopEntries(d, inv, shopUi.Inventory);
 
-        d.Add(ActionKind.Leave, "Leave Shop", () =>
+        d.Add(ActionKind.Leave, "离开商店", () =>
         {
             _roomLeft = true;
             if (shopUi.ProceedButton is { IsEnabled: true } pb) pb.ForceClick();
@@ -1163,7 +1299,7 @@ internal sealed class LiveSessionDriver
 
         var d = new Decision(DecisionKind.Shop) { Context = $"Fake Merchant Gold {me.Gold}" };
         AddShopEntries(d, inv, fmUi?.Inventory);
-        d.Add(ActionKind.Leave, "Leave", () =>
+        d.Add(ActionKind.Leave, "离开假商人", () =>
         {
             _roomLeft = true;
             if (fmUi != null && FakeMerchProceedField?.GetValue(fmUi) is NClickableControl pb)
@@ -1185,7 +1321,7 @@ internal sealed class LiveSessionDriver
             if (e is MerchantCardRemovalEntry { Used: true }) continue;
 
             var entry = e;
-            string label = e is MerchantCardRemovalEntry ? $"Buy Card Removal ({e.Cost})" : $"Buy {EntryLabel(e)} ({e.Cost})";
+            string label = BridgeLocalize.ShopBuy(e);
             d.Add(ActionKind.Buy, label, async () =>
             {
                 if (uiInv != null)
@@ -1227,7 +1363,7 @@ internal sealed class LiveSessionDriver
         {
             if (TreasureChestBtnField?.GetValue(trUi) is NClickableControl chestBtn && chestBtn.IsEnabled)
             {
-                autoDesc = "Open Treasure Chest";
+                autoDesc = "打开宝箱";
                 autoStep = () => { chestBtn.ForceClick(); return Task.CompletedTask; };
             }
             return null;
@@ -1237,7 +1373,7 @@ internal sealed class LiveSessionDriver
         {
             if (trUi.ProceedButton is { IsEnabled: true } pb && pb.IsVisibleInTree())
             {
-                autoDesc = "Proceed from Treasure Room";
+                autoDesc = "离开宝箱房";
                 autoStep = () => { pb.ForceClick(); return Task.CompletedTask; };
             }
             return null;
@@ -1249,7 +1385,7 @@ internal sealed class LiveSessionDriver
             if (trUi.ProceedButton is { IsEnabled: true } pbEmpty && pbEmpty.IsVisibleInTree())
             {
                 _relicDecided = true;
-                autoDesc = "Proceed from Treasure Room";
+                autoDesc = "离开宝箱房";
                 autoStep = () => { pbEmpty.ForceClick(); return Task.CompletedTask; };
             }
             return null;
@@ -1257,7 +1393,7 @@ internal sealed class LiveSessionDriver
 
         if (_cfg.AutoFreeRelics && relics.Count == 1 && RewardsFlow.IsNoDownside(relics[0]))
         {
-            autoDesc = "Claim Chest Relic " + relics[0].Id.Entry;
+            autoDesc = $"自动拿取宝箱遗物「{BridgeLocalize.RelicName(relics[0])}」";
             autoStep = () =>
             {
                 _relicDecided = true;
@@ -1271,7 +1407,7 @@ internal sealed class LiveSessionDriver
         for (int i = 0; i < relics.Count; i++)
         {
             int k = i;
-            d.Add(ActionKind.PickRelic, "Take " + relics[i].Id.Entry, () =>
+            d.Add(ActionKind.PickRelic, $"拿取宝箱遗物「{BridgeLocalize.RelicName(relics[i])}」", () =>
             {
                 _relicDecided = true;
                 ClickTreasureRelic(trUi, sync, k);
@@ -1279,7 +1415,7 @@ internal sealed class LiveSessionDriver
             }, a: relics[i]);
         }
 
-        d.Add(ActionKind.SkipRelic, "Skip Relic", () =>
+        d.Add(ActionKind.SkipRelic, "跳过遗物", () =>
         {
             _relicDecided = true;
             if (trUi.ProceedButton is { IsEnabled: true } pb) pb.ForceClick();
@@ -1320,13 +1456,12 @@ internal sealed class LiveSessionDriver
             Context = $"Act {s.CurrentActIndex + 1} {(cur == null ? "Start" : $"({cur.coord.col},{cur.coord.row})")}",
         };
 
-        foreach (var p in next)
+        for (int i = 0; i < next.Count; i++)
         {
-            var dest = p;
-            d.Add(ActionKind.MapMove, $"→ ({p.coord.col},{p.coord.row}) {p.PointType}", () =>
+            var dest = next[i];
+            d.Add(ActionKind.MapMove, BridgeLocalize.MapMove(dest, i, next.Count), () =>
             {
-                if (MapDictField?.GetValue(mapScreen) is Dictionary<MapCoord, NMapPoint> dict
-                    && dict.TryGetValue(dest.coord, out var node))
+                if (FindMapPointNode(mapScreen, dest) is { } node)
                 {
                     mapScreen.OnMapPointSelectedLocally(node);
                     return Task.CompletedTask;
@@ -1338,11 +1473,26 @@ internal sealed class LiveSessionDriver
                 };
                 RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new VoteForMapCoordAction(me, s.MapLocation, vote));
                 return Task.CompletedTask;
-            }, a: p);
+            }, a: dest);
         }
 
         AddPotionActions(me, d);
         return d;
+    }
+
+    static NMapPoint? FindMapPointNode(NMapScreen mapScreen, MapPoint dest)
+    {
+        if (MapDictField?.GetValue(mapScreen) is Dictionary<MapCoord, NMapPoint> dict
+            && dict.TryGetValue(dest.coord, out var node))
+            return node;
+
+        foreach (var fld in new[] { MapBossNodeField, MapSecondBossNodeField, MapStartNodeField })
+        {
+            if (fld?.GetValue(mapScreen) is NMapPoint special
+                && (ReferenceEquals(special.Point, dest) || special.Point?.coord == dest.coord))
+                return special;
+        }
+        return null;
     }
 
     // -------------------------------------------------------------------------
@@ -1388,7 +1538,7 @@ internal sealed class LiveSessionDriver
             if (p.IsValidTarget(me.Creature) || p.IsValidTarget(null))
             {
                 var pot = p;
-                d.Add(ActionKind.UsePotion, "Use " + p.Id.Entry, () =>
+                d.Add(ActionKind.UsePotion, BridgeLocalize.UsePotion(p, null, null), () =>
                 {
                     // Close shop rug before throwing FoulPotion at merchant (matching 决策记录 #227)
                     if (shopInventoryUi is { IsOpen: true } && pot.Id.Entry == "FOUL_POTION")
@@ -1409,7 +1559,7 @@ internal sealed class LiveSessionDriver
             if (slots[i] is { IsQueued: false } p)
             {
                 uint slot = (uint)i;
-                d.Add(ActionKind.DiscardPotion, "Discard " + p.Id.Entry, () =>
+                d.Add(ActionKind.DiscardPotion, BridgeLocalize.DiscardPotion(p), () =>
                 {
                     RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(
                         new DiscardPotionGameAction(me, slot, CombatManager.Instance.IsInProgress));
@@ -1439,27 +1589,6 @@ internal sealed class LiveSessionDriver
         _ => e,
     };
 
-    static string EntryLabel(MerchantEntry e) => e switch
-    {
-        MerchantCardEntry c => c.CreationResult!.Card.Id.Entry,
-        MerchantRelicEntry r => r.Model?.Id.Entry ?? "Relic",
-        MerchantPotionEntry p => p.Model?.Id.Entry ?? "Potion",
-        MerchantCardRemovalEntry => "CardRemoval",
-        _ => e.GetType().Name,
-    };
-
-    static string RewardLabel(Reward r) => r switch
-    {
-        GoldReward g => $"Gold ({g.Amount})",
-        PotionReward p => "Potion " + p.Potion?.Id.Entry,
-        RelicReward rr => "Relic " + rr.Relic?.Id.Entry,
-        CardReward => "Card Reward",
-        _ => r.GetType().Name,
-    };
-
-    static string TargetLabel(Creature? t) =>
-        t == null ? "" : t.IsPlayer ? " → Self" : $" → {t.Monster?.Id.Entry}";
-
     static string ComputeSignature(RunState s, Decision d)
     {
         var me = s.Players[0];
@@ -1468,7 +1597,8 @@ internal sealed class LiveSessionDriver
             ? "out"
             : $"{pcs.TurnNumber}:{pcs.Energy}:{pcs.Stars}:{me.Creature.CurrentHp}:{me.Creature.Block}:{pcs.Hand.Cards.Count}:{pcs.DrawPile.Cards.Count}:{pcs.DiscardPile.Cards.Count}:{pcs.PlayPile.Cards.Count}:"
               + string.Join(",", me.Creature.CombatState?.Creatures.Select(c => $"{c.CurrentHp}/{c.Block}/{c.IsAlive}") ?? Array.Empty<string>());
-        string choicesPart = string.Join("|", d.Choices.Select(c => $"{(int)c.Kind}:{c.Label}:{c.F0}:{c.F1}"));
+        string choicesPart = string.Join("|", d.Choices.Select(c =>
+            $"{(int)c.Kind}:{c.Key}:{(c.A == null ? 0 : RuntimeHelpers.GetHashCode(c.A))}:{(c.B == null ? 0 : RuntimeHelpers.GetHashCode(c.B))}:{c.F0}:{c.F1}:{c.F2}"));
         return $"{d.Kind}|{s.CurrentActIndex}|{s.TotalFloor}|{me.Gold}|{me.Creature.CurrentHp}/{me.Creature.MaxHp}|{d.Selected}|{combatPart}||{choicesPart}";
     }
 }

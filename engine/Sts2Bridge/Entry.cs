@@ -29,10 +29,11 @@ public static class Entry
     {
         if (_initialized) return;
         _initialized = true;
+        BridgeLocalize.GodotRuntimeActive = true;
 
         var cfg = BridgeConfig.Load();
         BridgeLog.Init(BridgeConfig.ModDir);
-        BridgeLog.Info($"Initializing Sts2Bridge v1.1.1 in {BridgeConfig.ModDir} (log={BridgeLog.ActiveLogPath}, backend={cfg.Backend}, top_k={cfg.TopK}, auto_play={cfg.AutoPlay})");
+        BridgeLog.Info($"Initializing Sts2Bridge v1.2.0 in {BridgeConfig.ModDir} (log={BridgeLog.ActiveLogPath}, backend={cfg.Backend}, top_k={cfg.TopK}, auto_play={cfg.AutoPlay})");
 
         string vocabPath = Path.Combine(BridgeConfig.ModDir, "vocab.txt");
         Vocab.Load(vocabPath);

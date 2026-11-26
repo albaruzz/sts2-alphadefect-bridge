@@ -89,9 +89,10 @@ public sealed class BridgeOverlay
         _panel.AnchorBottom = 0.0f;
         _panel.GrowHorizontal = Control.GrowDirection.Begin;
         _panel.GrowVertical = Control.GrowDirection.End;
+        _panel.OffsetLeft = -486f;
         _panel.OffsetRight = -16f;
-        _panel.OffsetTop = 72f;
-        _panel.CustomMinimumSize = new Vector2(340f, 0f);
+        _panel.OffsetTop = 68f;
+        _panel.CustomMinimumSize = new Vector2(470f, 0f);
         root.AddChild(_panel);
 
         var mainVBox = new VBoxContainer
@@ -164,14 +165,17 @@ public sealed class BridgeOverlay
         _optDrawer.Visible = false;
         mainVBox.AddChild(_optDrawer);
 
-        // Prediction & telemetry readout label (MouseFilter = Ignore so clicks pass through)
+        // Prediction & telemetry readout label (MouseFilter = Ignore so clicks pass through; WordSmart wrap prevents UI truncation)
         _label = new Label
         {
             Name = "HudLabel",
             MouseFilter = Control.MouseFilterEnum.Ignore,
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+            CustomMinimumSize = new Vector2(442f, 0f),
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
             Text = "正在初始化 AlphaDefect AI 助手...",
         };
-        BridgeFonts.ApplyFont(_label, 14);
+        BridgeFonts.ApplyFont(_label, 13);
         _label.AddThemeColorOverride("font_color", new Color(0.93f, 0.95f, 0.98f, 1.0f));
         _label.AddThemeColorOverride("font_outline_color", new Color(0f, 0f, 0f, 0.85f));
         _label.AddThemeConstantOverride("outline_size", 3);
@@ -410,16 +414,23 @@ public sealed class BridgeOverlay
 
         sb.AppendLine($"[{modeTag}] · {engineTag}");
 
-        if (!string.IsNullOrEmpty(statusNote))
+        if (!string.IsNullOrEmpty(decisionKind))
+        {
+            string noteSuffix = !string.IsNullOrEmpty(statusNote) ? $" · {statusNote}" : "";
+            sb.AppendLine($"当前节点 #{seq}: {LocalizeDecision(decisionKind)}{(waitingReply ? " (计算中...)" : "")}{noteSuffix}");
+        }
+        else if (!string.IsNullOrEmpty(statusNote))
+        {
             sb.AppendLine($"状态: {statusNote}");
-        else if (!string.IsNullOrEmpty(decisionKind))
-            sb.AppendLine($"当前节点 #{seq}: {LocalizeDecision(decisionKind)}{(waitingReply ? " (计算中...)" : "")}");
+        }
         else
+        {
             sb.AppendLine("状态: 等待玩家决策点...");
+        }
 
         if (reply != null && reply.Seq == seq)
         {
-            sb.AppendLine($"下一步推荐: ▶ [{reply.Action + 1}] {Truncate(reply.Label, 32)} ({reply.Prob * 100f:0.1}%)");
+            sb.AppendLine($"下一步推荐: ▶ [{reply.Action + 1}] {reply.Label} ({reply.Prob * 100f:0.1}%)");
             string winStr = reply.WinProb is { } wp ? $"预计胜率 {wp * 100f:0.1}%  |  " : "";
             sb.AppendLine($"局面评估: {winStr}价值 {reply.Value:+0.000;-0.000;0.000} ({reply.InferMs:0.1}ms)");
 
@@ -439,8 +450,8 @@ public sealed class BridgeOverlay
                 {
                     var c = reply.TopK[i];
                     string mark = c.Index == reply.Action ? "▶" : " ";
-                    string bar = MakeProbBar(c.Prob, 8);
-                    sb.AppendLine($"{mark}[{c.Index + 1}] {bar} {c.Prob * 100f,5:0.1}%  {Truncate(c.Label, 26)}");
+                    string bar = MakeProbBar(c.Prob, 6);
+                    sb.AppendLine($"{mark}[{c.Index + 1}] {bar} {c.Prob * 100f,5:0.1}%  {c.Label}");
                 }
             }
         }
@@ -462,7 +473,7 @@ public sealed class BridgeOverlay
         "CardReward" => "战后选牌",
         "Bundle" => "卡包选择",
         "Rewards" => "战利品领取",
-        "Event" => "事件抉择",
+        "Event" => "事件/开局抉择",
         "RestSite" => "休息处",
         "Shop" => "商人商店",
         "Treasure" => "宝箱遗物",
@@ -470,7 +481,4 @@ public sealed class BridgeOverlay
         "Map" => "地图选路",
         _ => kind,
     };
-
-    static string Truncate(string s, int maxLen) =>
-        s.Length <= maxLen ? s : s[..(maxLen - 1)] + "…";
 }

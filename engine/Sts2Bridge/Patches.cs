@@ -182,6 +182,10 @@ internal static class BridgePatches
         LoadedFloor = 0;
         LastRunVictory = null;
         RunJustEnded = false;
+        PendingEventOptionTask = null;
+        LastSelectInfo = null;
+        HandSelectionInitialOptions = null;
+        AgentCardSelector.UsingPotion = null;
     }
 
     static void BeforeSavedSingleplayer(SerializableRun save)
@@ -189,6 +193,10 @@ internal static class BridgePatches
         try { LoadedFloor = save?.FloorReached ?? 1; } catch { LoadedFloor = 1; }
         LastRunVictory = null;
         RunJustEnded = false;
+        PendingEventOptionTask = null;
+        LastSelectInfo = null;
+        HandSelectionInitialOptions = null;
+        AgentCardSelector.UsingPotion = null;
     }
 
     static void BeforeRunEnded(bool isVictory)
@@ -201,6 +209,10 @@ internal static class BridgePatches
     {
         if (LastRunVictory == null && RunManager.Instance.IsInProgress)
             RunJustEnded = true;
+        PendingEventOptionTask = null;
+        LastSelectInfo = null;
+        HandSelectionInitialOptions = null;
+        AgentCardSelector.UsingPotion = null;
     }
 
     /// <summary>

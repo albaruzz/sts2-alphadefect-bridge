@@ -237,7 +237,7 @@ public sealed class BridgeLink : IDisposable
                 WriteMessage(stream, JsonSerializer.Serialize(new Dictionary<string, object?>
                 {
                     ["type"] = "hello",
-                    ["mod_version"] = "1.1.1",
+                    ["mod_version"] = "1.2.0",
                     ["obs_version"] = Sts2Headless.Observation.FormatVersion,
                     ["want_ack"] = true,
                 }, JsonOpts), null);

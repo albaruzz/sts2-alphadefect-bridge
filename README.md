@@ -1,15 +1,15 @@
 # sts2-alphadefect-bridge
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Release: v1.1.0](https://img.shields.io/badge/Release-v1.1.0%20ReadyToUse-success.svg)](https://github.com/Kurisu934/sts2-alphadefect-bridge/releases)
+[![Release: v1.2.0](https://img.shields.io/badge/Release-v1.2.0%20ReadyToUse-success.svg)](https://github.com/Kurisu934/sts2-alphadefect-bridge/releases)
 [![Game: Slay the Spire 2](https://img.shields.io/badge/Slay%20the%20Spire%202-v0.111.0%E2%80%93v0.114.0-purple.svg)](#1-三步安装整合包免-python开箱即用)
 
-**`sts2-alphadefect-bridge`** 是面向 [hmty-CHEN/AlphaDefect-Public](https://github.com/hmty-CHEN/AlphaDefect-Public) 开源权重与观测体系的 **《杀戮尖塔 2》（Slay the Spire 2）全功能实机 AI 预测与自动打牌模组（`Sts2Bridge` v1.1.0）+ 可选实时闭环树搜索服务端（`play_live.py`）**，以纯正 **MIT 协议** 开源发布。
+**`sts2-alphadefect-bridge`** 是面向 [hmty-CHEN/AlphaDefect-Public](https://github.com/hmty-CHEN/AlphaDefect-Public) 开源权重与观测体系的 **《杀戮尖塔 2》（Slay the Spire 2）全功能实机 AI 预测与自动打牌模组（`Sts2Bridge` v1.2.0）+ 可选实时闭环树搜索服务端（`play_live.py`）**，以纯正 **MIT 协议** 开源发布。
 
-### v1.1.0 核心亮点
+### v1.2.0 核心亮点
 
 - **零配置开箱即用（无需安装 Python / PyTorch）**：内置纯 `.NET 9.0` 跨平台硬件 SIMD 神经网络推理引擎（`NativeModel.cs`），整合包内已预置 **全部 6 位角色**（愚者 `FOOL`、铁甲战士 `IRONCLAD`、亡灵契约师 `NECROBINDER`、静默猎手 `SILENT`、储君 `REGENT`、故障机器人 `DEFECT`）的最优模型权重（`.s2nn`），支持 **Windows (`x64`) / macOS (`Apple Silicon arm64` & `x86_64`) / Linux (`x64`)** 解压即玩！
-- **局内实时查看下一步推荐与胜率**：右上角半透明穿透式中文面板（自动加载游戏内置中文字体，绝不遮挡正常鼠标点击）实时展示 **下一步推荐动作、视觉化概率条、预计通关胜率、局面价值估计**。
+- **全流程局内 + 局外完整预测（全候选原生汉化 + 自动换行防截断）**：全面覆盖 **战斗出牌、开局涅奥/先古三选一、地图路线选择（含整幕路线摘要 `RouteSummary`）、战后选牌/卡包/奖励、事件抉择、商人商店、休息处（营火）、宝箱遗物、水晶球占卜**；所有候选动作直接调用游戏原生本地化文本显示中文名称与完整说明，自适应多行折行（`WordSmart`）绝不截断文字！
 - **双入口可交互模组选项（可调 `Top-K` 候选数 + `自动模式`）**：
   1. **游戏原生 Mods（模组）界面**：选中 `AlphaDefect AI 助手 (Sts2Bridge)` 即可在下方 **`⚙ 模组选项 · AI 预测与自动模式`** 面板中直接拖动滑条调整 **`Top-K`（1–10）**、开关 **自动模式**、调节 **自动出牌间隔（50–1500 ms）** 与切换推理引擎；
   2. **局内右上角悬浮工具栏**：随时点击面板顶部的 **`[自动: 关/开]`**、**`[单步]`** 或 **`[⚙ 选项]`** 展开内嵌滑条，在战斗中途实时增减 `Top-K` 候选展示数量，立即生效并自动保存到 `bridge_config.json`！

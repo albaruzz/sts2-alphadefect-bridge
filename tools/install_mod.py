@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cross-platform installer for Sts2Bridge v1.1.0 into <Slay the Spire 2>/mods/Sts2Bridge/."""
+"""Cross-platform installer for Sts2Bridge v1.2.0 into <Slay the Spire 2>/mods/Sts2Bridge/."""
 from __future__ import annotations
 
 import argparse
