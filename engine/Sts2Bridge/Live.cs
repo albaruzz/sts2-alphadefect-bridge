@@ -109,10 +109,17 @@ internal sealed class LiveSessionDriver
     static readonly FieldInfo? MapSecondBossNodeField = AccessTools.Field(typeof(NMapScreen), "_secondBossPointNode");
     static readonly FieldInfo? MapStartNodeField = AccessTools.Field(typeof(NMapScreen), "_startingPointNode");
     static readonly FieldInfo? MapInputDisabledField = AccessTools.Field(typeof(NMapScreen), "_isInputDisabled");
+    static readonly FieldInfo? MapActAnimTweenField = AccessTools.Field(typeof(NMapScreen), "_actAnimTween");
     static readonly MethodInfo? MapCancelStartAnimMethod = AccessTools.Method(typeof(NMapScreen), "TryCancelStartOfActAnim");
     static readonly FieldInfo? OverlayListField = AccessTools.Field(typeof(NOverlayStack), "_overlays");
     static readonly FieldInfo? AncientDialogueHitboxField = AccessTools.Field(typeof(NAncientEventLayout), "_dialogueHitbox");
+    static readonly FieldInfo? AncientDialogueField = AccessTools.Field(typeof(NAncientEventLayout), "_dialogue");
     static readonly PropertyInfo? AncientLastLineProp = AccessTools.Property(typeof(NAncientEventLayout), "IsDialogueOnLastLine");
+    static readonly PropertyInfo? CombatEventStartedProp = AccessTools.Property(typeof(NCombatEventLayout), "HasCombatStarted");
+    static readonly Type? ModalContainerType = AccessTools.TypeByName("MegaCrit.Sts2.Core.Nodes.CommonUi.NModalContainer")
+        ?? AccessTools.TypeByName("MegaCrit.Sts2.Core.Nodes.Screens.Modals.NModalContainer");
+    static readonly PropertyInfo? ModalInstanceProp = ModalContainerType != null ? AccessTools.Property(ModalContainerType, "Instance") : null;
+    static readonly PropertyInfo? ModalOpenProp = ModalContainerType != null ? AccessTools.Property(ModalContainerType, "OpenModal") : null;
 
     readonly BridgeConfig _cfg;
     readonly BridgeLink _link;
@@ -138,6 +145,12 @@ internal sealed class LiveSessionDriver
     string? _currentSignature;
     ulong _stableSinceMs;
     ulong _cooldownUntilMs;
+    ulong _ancientLastLineSinceMs;
+    ulong _ancientNoHitboxSinceMs;
+    ulong _eventButtonsSeenSinceMs;
+    ulong _eventFinishedSeenSinceMs;
+    Task? _trackedPendingEventTask;
+    ulong _pendingEventTaskSinceMs;
     Decision? _activeDecision;
     int _activeSeq;
     bool _waitingReply;
@@ -286,7 +299,13 @@ internal sealed class LiveSessionDriver
             _waitingReply = true;
             _encodeError = null;
             SendDecisionFrame(state, poll, _activeSeq);
-            if (_encodeError != null) _statusNote = _encodeError;
+            if (_encodeError != null)
+            {
+                _statusNote = _encodeError;
+                _activeDecision = null;
+                _waitingReply = false;
+                _cooldownUntilMs = now + 300;
+            }
             return;
         }
 
@@ -483,6 +502,10 @@ internal sealed class LiveSessionDriver
             return null;
         }
 
+        // 0b. Modal container (FTUE tutorial popups or confirmation dialogs)
+        if (CheckOpenModal(out autoStep, out autoDesc))
+            return null;
+
         // 1. Open Map Screen MUST be checked BEFORE NOverlayStack!
         //    In STS2, opening NMapScreen after combat/rewards calls NOverlayStack.HideOverlays() WITHOUT removing
         //    NRewardsScreen from NOverlayStack._overlays (StackIsCovered == true). Checking NOverlayStack first
@@ -494,15 +517,31 @@ internal sealed class LiveSessionDriver
                 _statusNote = "正在前往目标节点...";
                 return null;
             }
+            bool actAnimRunning = MapActAnimTweenField?.GetValue(mapScreen) is Tween tw
+                && GodotObject.IsInstanceValid(tw) && tw.IsRunning();
             if (mapScreen.IsTravelEnabled)
             {
                 bool inputDisabled = MapInputDisabledField?.GetValue(mapScreen) is true;
-                canExecuteNow = !inputDisabled;
-                if (inputDisabled) _statusNote = "地图展开中...";
+                if (actAnimRunning)
+                {
+                    canExecuteNow = false;
+                    _statusNote = "开幕地图滚动中 (可先查看路线推荐)";
+                    autoDesc = "跳过地图滚动动画";
+                    autoStep = () =>
+                    {
+                        MapCancelStartAnimMethod?.Invoke(mapScreen, null);
+                        return Task.CompletedTask;
+                    };
+                }
+                else
+                {
+                    canExecuteNow = !inputDisabled;
+                    if (inputDisabled) _statusNote = "地图展开中...";
+                }
                 return BuildMapDecision(s, me, mapScreen);
             }
-            // Act-start map scroll animation (CurrentRoom is MapRoom while StartOfActAnim scrolls down)
-            if (s.CurrentRoom is MapRoom)
+            // Act-start map scroll animation (CurrentRoom is MapRoom or opening Neow EventRoom before Floor 1)
+            if (actAnimRunning || s.CurrentRoom is MapRoom || (s.CurrentRoom is EventRoom && s.VisitedMapCoords.Count == 0))
             {
                 canExecuteNow = false;
                 _statusNote = "开幕地图滚动中 (可先查看路线推荐)";
@@ -558,30 +597,36 @@ internal sealed class LiveSessionDriver
         {
             _room = s.CurrentRoom;
             _roomLeft = _restChosen = _relicDecided = _shopInitialized = false;
+            _ancientLastLineSinceMs = 0;
+            _ancientNoHitboxSinceMs = 0;
+            _eventButtonsSeenSinceMs = 0;
+            _eventFinishedSeenSinceMs = 0;
             _failed.Clear();
             BridgePatches.PendingEventOptionTask = null;
+            _trackedPendingEventTask = null;
         }
 
         // 5. Out-of-combat Rooms (Events incl. Neow/Ancients, RestSite, Shop, Treasure, MapRoom fallback)
         switch (s.CurrentRoom)
         {
             case EventRoom { CanonicalEvent: FakeMerchant } when !_roomLeft
-                && RunManager.Instance.EventSynchronizer.GetLocalEvent() is FakeMerchant { StartedFight: false } fm:
+                && TryGetLocalEvent() is FakeMerchant { StartedFight: false } fm:
                 return BuildFakeMerchantDecision(me, fm);
 
             case EventRoom:
             {
-                var ev = RunManager.Instance.EventSynchronizer.GetLocalEvent();
+                var ev = TryGetLocalEvent();
                 if (ev == null) return null;
-                if (ev.IsFinished)
+                if (IsEventOptionTaskRunning())
                 {
-                    if (NEventRoom.Instance != null)
-                    {
-                        autoDesc = "离开事件";
-                        autoStep = () => NEventRoom.Proceed();
-                    }
+                    _statusNote = "正在结算事件效果...";
                     return null;
                 }
+                if (ev.IsFinished)
+                {
+                    return HandleFinishedEventRoom(out autoStep, out autoDesc);
+                }
+                _eventFinishedSeenSinceMs = 0;
                 return BuildEventDecision(me, ev, out autoStep, out autoDesc, out canExecuteNow);
             }
 
@@ -1106,48 +1151,112 @@ internal sealed class LiveSessionDriver
 
         if (NEventRoom.Instance is not { } er) return null;
 
-        // Wait for NEventRoom.SetupLayout() (0.2s fade-in) so NEventOptionButton._Ready captures & binds LocString variables
         var layout = er.Layout;
-        if (layout == null && er.CustomEventNode == null)
-        {
-            _statusNote = "正在加载事件选项...";
+        if (layout != null && CombatEventStartedProp?.GetValue(layout) is true)
             return null;
-        }
 
-        // If an option's async Task is genuinely still running (and no fresh enabled option buttons are waiting), hold off
-        if (BridgePatches.PendingEventOptionTask is { IsCompleted: false })
+        ulong now = Time.GetTicksMsec();
+        List<NEventOptionButton> buttons;
+        if (er.CustomEventNode == null)
         {
-            bool anyFreshBtn = layout != null && layout.OptionButtons.Any(b => !b.Option.IsLocked && b.IsVisibleInTree() && b.IsEnabled && !b.Option.WasChosen);
-            if (!anyFreshBtn)
+            if (layout == null)
             {
-                _statusNote = "正在结算事件效果...";
+                _eventButtonsSeenSinceMs = 0;
+                _statusNote = "正在加载事件界面...";
                 return null;
             }
-            BridgePatches.PendingEventOptionTask = null;
+            // IMPORTANT: NEventRoom._Ready() assigns er.Layout synchronously BEFORE SetupLayout() awaits Cmd.Wait(0.2f).
+            // During those 0.2s, layout != null while OptionButtons is still empty! Waiting until OptionButtons is
+            // populated guarantees SetupLayout() completed, BeforeEventOptionButtonReady snapshotted OriginalEventOptionVarKeys,
+            // and clicking an option cannot be overwritten by SetupLayout() waking up.
+            buttons = layout.OptionButtons.ToList();
+            if (buttons.Count == 0)
+            {
+                _eventButtonsSeenSinceMs = 0;
+                _ancientLastLineSinceMs = 0;
+                _ancientNoHitboxSinceMs = 0;
+                _statusNote = "正在加载事件选项...";
+                return null;
+            }
+            if (!buttons.Any(b => !b.Option.IsLocked && !b.Option.WasChosen))
+            {
+                _statusNote = "正在刷新事件选项...";
+                return null;
+            }
+            if (_eventButtonsSeenSinceMs == 0)
+                _eventButtonsSeenSinceMs = now;
+        }
+        else
+        {
+            buttons = layout?.OptionButtons.ToList() ?? new List<NEventOptionButton>();
+            _eventButtonsSeenSinceMs = 0;
         }
 
-        // Ancient / Neow opening event dialogue check:
-        // While NAncientEventLayout is still on dialogue lines (!unlockedButtonsReady), we STILL compute & display
-        // the AI's 3-blessing prediction immediately for Advisory mode, while wiring autoStep to click through dialogue!
+        // Ancient / Neow event dialogue & slide-in check:
+        // Note: NClickableControl._isEnabled is true in .ctor and NAncientEventLayout.AnimateButtonsIn() sets MouseFilter=Stop
+        // right at SetupLayout() (while options are clipped off-screen below dialogue!). So b.IsVisibleInTree() && b.IsEnabled
+        // is ALREADY true on dialogue line 0! We MUST inspect IsDialogueOnLastLine + _dialogueHitbox instead.
         if (layout is NAncientEventLayout ancientLayout)
         {
-            bool unlockedButtonsReady = ancientLayout.OptionButtons.Any(b => !b.Option.IsLocked && b.IsVisibleInTree() && b.IsEnabled);
-            if (!unlockedButtonsReady)
+            bool hasDialogue = AncientDialogueField?.GetValue(ancientLayout) is System.Collections.ICollection col && col.Count > 0;
+            bool onLastLine = !hasDialogue || (AncientLastLineProp?.GetValue(ancientLayout) is true);
+            var hitbox = AncientDialogueHitboxField?.GetValue(ancientLayout) as NClickableControl;
+            bool hitboxActive = hitbox != null && hitbox.IsVisibleInTree() && hitbox.IsEnabled;
+
+            if (hitboxActive)
             {
+                _ancientLastLineSinceMs = 0;
+                _ancientNoHitboxSinceMs = 0;
                 canExecuteNow = false;
-                if (AncientDialogueHitboxField?.GetValue(ancientLayout) is NClickableControl hitbox && hitbox.IsVisibleInTree() && hitbox.IsEnabled)
+                _statusNote = "先古对话中 (自动模式将推进对话，或点[单步])";
+                autoDesc = "推进先古对话";
+                var hb = hitbox!;
+                autoStep = () =>
                 {
-                    _statusNote = "点击对话框进入选遗物 (或点[单步]推进)";
-                    autoDesc = "推进先古对话";
-                    autoStep = () =>
-                    {
-                        hitbox.ForceClick();
-                        return Task.CompletedTask;
-                    };
-                }
-                else
+                    hb.ForceClick();
+                    return Task.CompletedTask;
+                };
+            }
+            else if (!onLastLine)
+            {
+                _ancientLastLineSinceMs = 0;
+                if (_ancientNoHitboxSinceMs == 0) _ancientNoHitboxSinceMs = now;
+                if (now - _ancientNoHitboxSinceMs < 1200)
                 {
+                    canExecuteNow = false;
                     _statusNote = "先古对话过渡中...";
+                }
+            }
+            else
+            {
+                _ancientNoHitboxSinceMs = 0;
+                if (_ancientLastLineSinceMs == 0) _ancientLastLineSinceMs = now;
+                ulong elapsedLastLine = now - _ancientLastLineSinceMs;
+                bool focusReady = buttons.Any(b =>
+                    !b.Option.IsLocked && b.IsEnabled
+                    && b.FocusMode != Control.FocusModeEnum.None
+                    && b.MouseFilter == Control.MouseFilterEnum.Stop);
+                // Wait briefly for the 0.8s slide-up tween (which enables FocusMode.All on completion), with a 950ms safety cap
+                if ((hasDialogue && elapsedLastLine < 450) || (!focusReady && elapsedLastLine < 950))
+                {
+                    canExecuteNow = false;
+                    _statusNote = "祝福选项展开中...";
+                }
+            }
+        }
+        else
+        {
+            _ancientLastLineSinceMs = 0;
+            _ancientNoHitboxSinceMs = 0;
+            if (er.CustomEventNode == null)
+            {
+                // Standard NEventLayout: NEventOptionButton.AnimateIn() calls EnableButton() -> MouseFilter = Stop after fade-in
+                bool buttonsInteractive = buttons.Any(b =>
+                    !b.Option.IsLocked && b.IsEnabled && b.MouseFilter == Control.MouseFilterEnum.Stop);
+                if (!buttonsInteractive && now - _eventButtonsSeenSinceMs < 1200)
+                {
+                    canExecuteNow = false;
+                    _statusNote = "事件选项展开中...";
                 }
             }
         }
@@ -1164,7 +1273,10 @@ internal sealed class LiveSessionDriver
             {
                 if (NEventRoom.Instance is { } roomUi)
                 {
-                    var btn = roomUi.Layout?.OptionButtons.FirstOrDefault(b => ReferenceEquals(b.Option, opt) && b.IsEnabled);
+                    var uiBtns = roomUi.Layout?.OptionButtons.ToList();
+                    var btn = uiBtns?.FirstOrDefault(b => ReferenceEquals(b.Option, opt) && b.IsEnabled);
+                    if (btn == null && uiBtns != null && k < uiBtns.Count && uiBtns[k].IsEnabled && !uiBtns[k].Option.IsLocked)
+                        btn = uiBtns[k];
                     if (btn != null && btn.IsVisibleInTree())
                     {
                         btn.ForceClick();
@@ -1181,7 +1293,148 @@ internal sealed class LiveSessionDriver
 
         if (d.Choices.Count == 0) return null;
         AddPotionActions(me, d);
+
+        // Single unlocked IsProceed option (e.g. final flavor page or blocked Ancient) with no out-of-combat potion choices:
+        // auto-advance cleanly once UI gate is ready, without counting as a macro model step.
+        if (d.Choices.Count == 1 && d.Choices[0].A is EventOption { IsProceed: true })
+        {
+            if (canExecuteNow)
+            {
+                autoDesc = "继续前进";
+                autoStep = d.Choices[0].Run;
+            }
+            return null;
+        }
+
         return d;
+    }
+
+    static EventModel? TryGetLocalEvent()
+    {
+        try
+        {
+            return RunManager.Instance.EventSynchronizer?.GetLocalEvent();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    bool IsEventOptionTaskRunning()
+    {
+        var t = BridgePatches.PendingEventOptionTask;
+        if (t is not { IsCompleted: false })
+        {
+            _trackedPendingEventTask = null;
+            BridgePatches.PendingEventOptionTask = null;
+            return false;
+        }
+        ulong now = Time.GetTicksMsec();
+        if (!ReferenceEquals(t, _trackedPendingEventTask))
+        {
+            _trackedPendingEventTask = t;
+            _pendingEventTaskSinceMs = now;
+            return true;
+        }
+        if (now - _pendingEventTaskSinceMs > 5000)
+        {
+            BridgePatches.PendingEventOptionTask = null;
+            _trackedPendingEventTask = null;
+            return false;
+        }
+        return true;
+    }
+
+    Decision? HandleFinishedEventRoom(out Func<Task>? autoStep, out string? autoDesc)
+    {
+        autoStep = null;
+        autoDesc = null;
+        if (NEventRoom.Instance is not { } er) return null;
+
+        ulong now = Time.GetTicksMsec();
+        if (_eventFinishedSeenSinceMs == 0)
+            _eventFinishedSeenSinceMs = now;
+
+        var buttons = er.Layout?.OptionButtons.ToList();
+        var proceedBtn = buttons?.FirstOrDefault(b => !b.Option.IsLocked && b.Option.IsProceed && b.IsVisibleInTree() && b.IsEnabled);
+        if (proceedBtn != null)
+        {
+            bool interactive = er.Layout is NAncientEventLayout
+                || proceedBtn.MouseFilter == Control.MouseFilterEnum.Stop
+                || (now - _eventFinishedSeenSinceMs >= 650);
+            if (!interactive)
+            {
+                _statusNote = "正在生成离开按钮...";
+                return null;
+            }
+            autoDesc = "离开事件";
+            autoStep = () =>
+            {
+                proceedBtn.ForceClick();
+                return Task.CompletedTask;
+            };
+            return null;
+        }
+
+        // Wait briefly in case SetupLayout() / SetOptions() is still creating the PROCEED button
+        if (er.CustomEventNode == null && er.Layout != null && (now - _eventFinishedSeenSinceMs < 400))
+        {
+            _statusNote = "正在结算事件...";
+            return null;
+        }
+
+        autoDesc = "离开事件";
+        autoStep = () => NEventRoom.Proceed();
+        return null;
+    }
+
+    bool CheckOpenModal(out Func<Task>? autoStep, out string? autoDesc)
+    {
+        autoStep = null;
+        autoDesc = null;
+        try
+        {
+            var mc = ModalInstanceProp?.GetValue(null);
+            if (mc == null) return false;
+            if (ModalOpenProp?.GetValue(mc) is not Node openModal) return false;
+            if (openModal is CanvasItem ci && !ci.IsVisibleInTree()) return false;
+
+            if (openModal.GetType().FullName?.Contains("Ftue", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                var confirmBtn = FindFirstEnabledButton(openModal);
+                if (confirmBtn != null)
+                {
+                    _statusNote = "检测到新手提示弹窗 (可自动关闭)";
+                    autoDesc = "关闭新手提示";
+                    autoStep = () =>
+                    {
+                        confirmBtn.ForceClick();
+                        return Task.CompletedTask;
+                    };
+                    return true;
+                }
+            }
+
+            _statusNote = "等待当前弹窗关闭...";
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    static NButton? FindFirstEnabledButton(Node root)
+    {
+        foreach (Node child in root.GetChildren())
+        {
+            if (child is NButton b && b.IsVisibleInTree() && b.IsEnabled)
+                return b;
+            if (FindFirstEnabledButton(child) is { } sub)
+                return sub;
+        }
+        return null;
     }
 
     Decision? BuildRestDecision(Player me, out Func<Task>? autoStep, out string? autoDesc)
@@ -1589,6 +1842,22 @@ internal sealed class LiveSessionDriver
         _ => e,
     };
 
+    internal static string StableChoiceObjKey(object? obj, bool isSlotB) => obj switch
+    {
+        null => "0",
+        EventOption eo => $"eo:{eo.TextKey}:{eo.Relic?.Id.Entry}:{eo.IsLocked}:{eo.IsProceed}:{eo.WasChosen}",
+        MapPoint mp => $"mp:{mp.coord.col},{mp.coord.row}:{mp.PointType}",
+        RestSiteOption ro => $"ro:{ro.OptionId}:{ro.IsEnabled}",
+        Creature cr => $"cr:{RuntimeHelpers.GetHashCode(cr)}:{cr.CurrentHp}:{cr.Block}",
+        CardModel cm => isSlotB
+            ? $"cmB:{cm.Id.Entry}:{cm.CurrentUpgradeLevel}:{cm.Enchantment?.Id.Entry}"
+            : $"cmA:{cm.Id.Entry}:{cm.CurrentUpgradeLevel}:{cm.Enchantment?.Id.Entry}:{RuntimeHelpers.GetHashCode(cm)}",
+        AbstractModel am => $"am:{am.Id.Category}:{am.Id.Entry}",
+        Reward rw => $"rw:{rw.GetType().Name}:{RuntimeHelpers.GetHashCode(rw)}",
+        MerchantEntry me => $"me:{me.GetType().Name}:{me.Cost}:{me.IsStocked}",
+        _ => RuntimeHelpers.GetHashCode(obj).ToString(),
+    };
+
     static string ComputeSignature(RunState s, Decision d)
     {
         var me = s.Players[0];
@@ -1598,7 +1867,7 @@ internal sealed class LiveSessionDriver
             : $"{pcs.TurnNumber}:{pcs.Energy}:{pcs.Stars}:{me.Creature.CurrentHp}:{me.Creature.Block}:{pcs.Hand.Cards.Count}:{pcs.DrawPile.Cards.Count}:{pcs.DiscardPile.Cards.Count}:{pcs.PlayPile.Cards.Count}:"
               + string.Join(",", me.Creature.CombatState?.Creatures.Select(c => $"{c.CurrentHp}/{c.Block}/{c.IsAlive}") ?? Array.Empty<string>());
         string choicesPart = string.Join("|", d.Choices.Select(c =>
-            $"{(int)c.Kind}:{c.Key}:{(c.A == null ? 0 : RuntimeHelpers.GetHashCode(c.A))}:{(c.B == null ? 0 : RuntimeHelpers.GetHashCode(c.B))}:{c.F0}:{c.F1}:{c.F2}"));
-        return $"{d.Kind}|{s.CurrentActIndex}|{s.TotalFloor}|{me.Gold}|{me.Creature.CurrentHp}/{me.Creature.MaxHp}|{d.Selected}|{combatPart}||{choicesPart}";
+            $"{(int)c.Kind}:{c.Key}:{StableChoiceObjKey(c.A, isSlotB: false)}:{StableChoiceObjKey(c.B, isSlotB: true)}:{c.F0}:{c.F1}:{c.F2}"));
+        return $"{d.Kind}|{d.Context}|{s.CurrentActIndex}|{s.TotalFloor}|{me.Gold}|{me.Creature.CurrentHp}/{me.Creature.MaxHp}|{d.Selected}|{combatPart}||{choicesPart}";
     }
 }

@@ -237,18 +237,21 @@ public sealed partial class Observation
     {
         Begin(); _f[0] = ev.IsLocked ? 1 : 0; _f[1] = ev.IsProceed ? 1 : 0;
         int k = 2;
-        foreach (var v in ev.Description.Variables.Values)
+        if (ev.Description?.Variables != null)
         {
-            if (k > 7) break;
-            float? x = v switch
+            foreach (var v in ev.Description.Variables.Values)
             {
-                MegaCrit.Sts2.Core.Localization.DynamicVars.DynamicVar dv => (float)dv.BaseValue,
-                decimal m => (float)m,
-                int i => i,
-                bool b => b ? 1 : 0,
-                _ => null,
-            };
-            if (x is { } val) _f[k++] = val;
+                if (k > 7) break;
+                float? x = v switch
+                {
+                    MegaCrit.Sts2.Core.Localization.DynamicVars.DynamicVar dv => (float)dv.BaseValue,
+                    decimal m => (float)m,
+                    int i => i,
+                    bool b => b ? 1 : 0,
+                    _ => null,
+                };
+                if (x is { } val) _f[k++] = val;
+            }
         }
         // 版本 16（第十二份外部评审，决策记录 205）：选项文字里已经展示、原来按字符串丢掉的信息。
         // “药水的未来？”：12 这瓶药水换成的牌型（1 攻击、2 技能、3 能力），13 稀有度（1 普通、2 罕见、3 稀有）；
@@ -303,7 +306,8 @@ public sealed partial class Observation
         // 词表外计数（头部 14 原来每进一次第二幕就加 1，“应为 0”的检查因此失效）；词表里有的键（欧洛巴斯的 OPTION_POOL_3_LOCKED 等）照常
         int optId;
         {
-            var evm = F113 ? RunManager.Instance.EventSynchronizer.GetLocalEvent() : null;
+            EventModel? evm = null;
+            if (F113) { try { evm = RunManager.Instance.EventSynchronizer?.GetLocalEvent(); } catch { } }
             bool quiet = F113 && (ev.TextKey == "PROCEED" || (evm is MegaCrit.Sts2.Core.Models.AncientEventModel && evm is not MegaCrit.Sts2.Core.Models.Events.Neow)
                                   || evm is MegaCrit.Sts2.Core.Models.Events.TheArchitect || evm is MegaCrit.Sts2.Core.Models.Events.DollRoom);
             optId = quiet ? Vocab.IdQuiet(Vocab.EventOption(ev.TextKey)) : Vocab.Id(Vocab.EventOption(ev.TextKey));
@@ -318,7 +322,7 @@ public sealed partial class Observation
     {
         try
         {
-            if (RunManager.Instance.EventSynchronizer.GetLocalEvent() is not MegaCrit.Sts2.Core.Models.Events.TheFutureOfPotions fp) return (0, 0);
+            if (RunManager.Instance.EventSynchronizer.GetLocalEvent() is not MegaCrit.Sts2.Core.Models.Events.TheFutureOfPotions fp || fp.Owner == null) return (0, 0);
             int idx = fp.CurrentOptions.ToList().IndexOf(ev);
             var pots = fp.Owner.Potions.ToList();
             if (idx < 0 || idx >= pots.Count) return (0, 0);
