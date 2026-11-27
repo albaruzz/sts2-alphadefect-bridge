@@ -74,6 +74,8 @@ internal sealed class LiveSessionDriver
     static readonly MethodInfo? ChooseCardSelectHolderMethod = AccessTools.Method(typeof(NChooseACardSelectionScreen), "SelectHolder");
 
     static readonly FieldInfo? GridCardsField = AccessTools.Field(typeof(NCardGridSelectionScreen), "_cards");
+    static readonly FieldInfo? CombatPileField = AccessTools.Field(typeof(NCombatPileCardSelectScreen), "_pile");
+    static readonly FieldInfo? CombatPileFilterField = AccessTools.Field(typeof(NCombatPileCardSelectScreen), "_filter");
     static readonly MethodInfo? GridCardClickedMethod = AccessTools.Method(typeof(NCardGridSelectionScreen), "OnCardClicked");
 
     static readonly FieldInfo? HandSelectedCardsField = AccessTools.Field(typeof(NPlayerHand), "_selectedCards");
@@ -818,8 +820,20 @@ internal sealed class LiveSessionDriver
 
     Decision? BuildGridCardSelectDecision(RunState s, NCardGridSelectionScreen screen)
     {
-        if (GridCardsField?.GetValue(screen) is not IReadOnlyList<CardModel> cards) return null;
         var st = screen.GetType();
+        // NCombatPileCardSelectScreen overrides the base grid but keeps its choices in _pile,
+        // leaving the base _cards field empty. Without this fallback the only candidate is "Skip".
+        var cards = GridCardsField?.GetValue(screen) as IReadOnlyList<CardModel>;
+        if (cards == null || cards.Count == 0)
+        {
+            if (CombatPileField?.GetValue(screen) is CardPile pile)
+            {
+                var filter = CombatPileFilterField?.GetValue(screen) as Func<CardModel, bool>;
+                var pileCards = pile.Cards;
+                cards = filter == null ? pileCards : pileCards.Where(filter).ToList();
+            }
+        }
+        if (cards == null || cards.Count == 0) return null;
         var prefs = AccessTools.Field(st, "_prefs")?.GetValue(screen) is CardSelectorPrefs pr ? pr : default;
         var selectedSet = AccessTools.Field(st, "_selectedCards")?.GetValue(screen) as IEnumerable<CardModel> ?? Enumerable.Empty<CardModel>();
         var selectedRef = new HashSet<CardModel>(selectedSet, ReferenceEqualityComparer.Instance);
