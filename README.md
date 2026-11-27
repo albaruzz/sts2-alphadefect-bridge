@@ -76,6 +76,12 @@ v0.114.0, so treat the table as the networks' *original* strength, not a guarant
 game version. The built-in `.s2nn` weights are greedy (the "Greedy" column); the "Search" column
 requires the optional Python tree-search server.
 
+**Dread mode:** the paper (Section 5, Limitations) reports that Dread is much harder than
+standard Ascension 10. The better of two Dread-trained Defect networks, warm-started from a
+standard-mode checkpoint, won **16.8%** of 1,000 test seeds. That is the only published Dread
+result; no Dread checkpoint is released. Fine-tuning a standard checkpoint on Dread runs is
+therefore the documented approach, but expect a low win rate.
+
 ---
 
 ## Requirements
