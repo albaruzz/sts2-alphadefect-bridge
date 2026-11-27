@@ -21,13 +21,14 @@ encoder as AlphaDefect's headless trainer, so live decisions match training inpu
 ## Contents
 
 1. [Features](#features)
-2. [Requirements](#requirements)
-3. [Installation (ReadyToUse, no Python)](#installation-readytouse-no-python)
-4. [In-game controls and configuration](#in-game-controls-and-configuration)
-5. [Building from source](#building-from-source)
-6. [Optional: Python tree-search server](#optional-python-tree-search-server)
-7. [Troubleshooting](#troubleshooting)
-8. [Credits and license](#credits-and-license)
+2. [Results — win rates by character](#results--win-rates-by-character)
+3. [Requirements](#requirements)
+4. [Installation (ReadyToUse, no Python)](#installation-readytouse-no-python)
+5. [In-game controls and configuration](#in-game-controls-and-configuration)
+6. [Building from source](#building-from-source)
+7. [Optional: Python tree-search server](#optional-python-tree-search-server)
+8. [Troubleshooting](#troubleshooting)
+9. [Credits and license](#credits-and-license)
 
 ---
 
@@ -45,6 +46,35 @@ encoder as AlphaDefect's headless trainer, so live decisions match training inpu
 - **English UI**: every player-facing string is translated; candidate names use the game's own
   English localization tables.
 - **100% human-visible state**: the mod reads the same game state the player sees; no hidden memory.
+
+---
+
+## Results — win rates by character
+
+These are the published AlphaDefect results at **Ascension 10** (headless engine, greedy play), from
+the [AlphaDefect paper](https://arxiv.org/abs/2611.31076), Tables 3 and 4. "Search" adds
+32-simulation rollout search on the two Act-3 boss fights (v0.111.0) or information-set tree search
+in all boss and elite fights (v0.113.1). "Retest" is a fresh-seed run that was not used for
+development choices.
+
+| Character | Game build | Network | Greedy | Search | Fresh-seed retest (greedy / search) |
+| --- | --- | --- | --- | --- | --- |
+| DEFECT | v0.111.0 | distilled student `e` (v165018) | **76.7%** | **80.3%** | 77.8% / — (greedy only; seeds unused for choices) |
+| REGENT | v0.111.0 | distilled student `e8` (v54603) | **74.1%** | **77.2%** | 74.9% / 80.5% |
+| SILENT | v0.111.0 | EMA v26428 | **71.3%** | **74.0%** | 71.2% / 73.6% |
+| IRONCLAD | v0.113.1 | EMA v24782 | **67.9%** | **73.1%** | 66.5% / — (greedy only) |
+| NECROBINDER | v0.113.1 | raw v25875 | **63.1%** | **67.6%** | tested on fresh seeds only (RV1) |
+| FOOL | v0.113.1 | EMA v24181 | **62.2%** | **68.0%** | 62.5% / 66.7% |
+
+In 866 runs of the released game played through a mod on a public livestream (to 2026-11-22),
+the networks won 645 games against 642.5 expected from the headless results.
+Source: [AlphaDefect-Public README, Results](https://github.com/hmty-CHEN/AlphaDefect-Public#results).
+
+**Important:** none of these networks was trained on v0.114.0. Defect, Regent, and Silent weights
+were trained for v0.111.0; Fool, Ironclad, and Necrobinder for v0.113.1. This mod runs them on
+v0.114.0, so treat the table as the networks' *original* strength, not a guarantee for the current
+game version. The built-in `.s2nn` weights are greedy (the "Greedy" column); the "Search" column
+requires the optional Python tree-search server.
 
 ---
 
