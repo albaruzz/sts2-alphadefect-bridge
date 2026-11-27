@@ -74,9 +74,9 @@ public sealed class BridgeConfig
 
     public string BackendDisplayLabel() => Backend switch
     {
-        "builtin" => "仅内置模型 (免配置)",
-        "tcp" => "仅外部服务 (Python)",
-        _ => "自动 (内置兜底/外部优先)",
+        "builtin" => "Built-in only (no setup)",
+        "tcp" => "External only (Python)",
+        _ => "Auto (external first, built-in fallback)",
     };
 
     public void SaveAndNotify()

@@ -23,11 +23,11 @@ using Sts2Headless;
 namespace Sts2Bridge;
 
 /// <summary>
-/// Formats all combat &amp; out-of-combat candidate actions into clean, human-readable Simplified Chinese (zhs).
+/// Formats all combat &amp; out-of-combat candidate actions into clean, human-readable English (eng).
 /// Works seamlessly regardless of whether the player's game client language is set to Chinese or English:
 /// - When the game client is in Chinese, uses STS2's native SmartFormat output directly;
 /// - When the game client is in English (or another non-CJK language), automatically loads STS2's built-in
-///   `res://localization/zhs/&lt;table&gt;.json` dictionary from the game pack and substitutes DynamicVars!
+///   `res://localization/eng/&lt;table&gt;.json` dictionary from the game pack and substitutes DynamicVars!
 /// </summary>
 public static class BridgeLocalize
 {
@@ -47,12 +47,12 @@ public static class BridgeLocalize
         if (string.IsNullOrWhiteSpace(table)) return EmptyDict;
         return ZhsTables.GetOrAdd(table.Trim(), static tbl =>
         {
-            // 1. Try Godot virtual pack path (res://localization/zhs/<table>.json) when running inside Godot engine
+            // 1. Try Godot virtual pack path (res://localization/eng/<table>.json) when running inside Godot engine
             if (GodotRuntimeActive)
             {
                 try
                 {
-                    string resPath = $"res://localization/zhs/{tbl}.json";
+                    string resPath = $"res://localization/eng/{tbl}.json";
                     if (Godot.FileAccess.FileExists(resPath))
                     {
                         string json = Godot.FileAccess.GetFileAsString(resPath);
@@ -69,7 +69,7 @@ public static class BridgeLocalize
             // 2. Fallback to extracted filesystem res/ directory (used in headless tests)
             try
             {
-                string fsPath = Path.Combine(VirtualFs.ResDir, "localization", "zhs", $"{tbl}.json");
+                string fsPath = Path.Combine(VirtualFs.ResDir, "localization", "eng", $"{tbl}.json");
                 if (File.Exists(fsPath))
                 {
                     var parsed = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(fsPath));
@@ -142,12 +142,12 @@ public static class BridgeLocalize
         string s = ImgTagRegex.Replace(raw, m =>
         {
             string path = m.Groups[1].Value.ToLowerInvariant();
-            if (path.Contains("energy")) return "[能量]";
-            if (path.Contains("star")) return "[星]";
-            if (path.Contains("gold")) return "金币";
-            if (path.Contains("card")) return "卡牌";
-            if (path.Contains("potion")) return "药水";
-            if (path.Contains("relic")) return "遗物";
+            if (path.Contains("energy")) return "[Energy]";
+            if (path.Contains("star")) return "[Star]";
+            if (path.Contains("gold")) return "gold";
+            if (path.Contains("card")) return "Card";
+            if (path.Contains("potion")) return "Potion";
+            if (path.Contains("relic")) return "Relic";
             return "";
         });
 
@@ -160,7 +160,7 @@ public static class BridgeLocalize
     /// <summary>
     /// Resolves a LocString into Simplified Chinese:
     /// 1) Tries native GetFormattedText(); if it already contains CJK, returns it directly (exact SmartFormat).
-    /// 2) Otherwise looks up the exact (LocTable, LocEntryKey) in `res://localization/zhs/&lt;table&gt;.json`
+    /// 2) Otherwise looks up the exact (LocTable, LocEntryKey) in `res://localization/eng/&lt;table&gt;.json`
     ///    and substitutes `loc.Variables` so English game clients still get 100% Chinese candidate labels!
     /// </summary>
     public static string SafeLoc(LocString? loc)
@@ -193,7 +193,7 @@ public static class BridgeLocalize
 
     public static string CardName(CardModel? c)
     {
-        if (c == null) return "卡牌";
+        if (c == null) return "Card";
 
         string name = "";
         try
@@ -231,7 +231,7 @@ public static class BridgeLocalize
 
     public static string RelicName(RelicModel? r)
     {
-        if (r == null) return "遗物";
+        if (r == null) return "Relic";
         string name = SafeLoc(r.Title);
         if (!ContainsCjk(name) && LookupZhsRaw("relics", $"{r.Id.Entry}.title") is { Length: > 0 } zr)
             name = CleanText(zr);
@@ -240,7 +240,7 @@ public static class BridgeLocalize
 
     public static string PotionName(PotionModel? p)
     {
-        if (p == null) return "药水";
+        if (p == null) return "Potion";
         string name = SafeLoc(p.Title);
         if (!ContainsCjk(name) && LookupZhsRaw("potions", $"{p.Id.Entry}.title") is { Length: > 0 } zp)
             name = CleanText(zp);
@@ -270,13 +270,13 @@ public static class BridgeLocalize
         {
             try { name = CleanText(t.Name); } catch { }
         }
-        return string.IsNullOrEmpty(name) ? (t.Monster?.Id.Entry ?? "敌人") : name;
+        return string.IsNullOrEmpty(name) ? (t.Monster?.Id.Entry ?? "Enemy") : name;
     }
 
     public static string TargetSuffix(Creature? t, ICombatState? cs)
     {
         if (t == null) return "";
-        if (t.IsPlayer) return " → 自己";
+        if (t.IsPlayer) return " -> self";
 
         string name = MonsterName(t);
 
@@ -287,45 +287,45 @@ public static class BridgeLocalize
             if (sameCount > 1)
             {
                 int pos = aliveFoes.IndexOf(t);
-                string posTag = pos >= 0 ? $"左{pos + 1}·" : "";
-                return $" → {posTag}{name} ({t.CurrentHp}血)";
+                string posTag = pos >= 0 ? $"L{pos + 1}·" : "";
+                return $" -> {posTag}{name} ({t.CurrentHp} HP)";
             }
         }
-        return $" → {name} ({t.CurrentHp}血)";
+        return $" -> {name} ({t.CurrentHp} HP)";
     }
 
     public static string PlayCard(CardModel c, Creature? t, ICombatState? cs) =>
-        $"打出「{CardName(c)}」{TargetSuffix(t, cs)}";
+        $"Play '{CardName(c)}'{TargetSuffix(t, cs)}";
 
     public static string UsePotion(PotionModel p, Creature? t, ICombatState? cs) =>
-        $"使用药水「{PotionName(p)}」{TargetSuffix(t, cs)}";
+        $"Use potion '{PotionName(p)}'{TargetSuffix(t, cs)}";
 
     public static string DiscardPotion(PotionModel p) =>
-        $"丢弃药水「{PotionName(p)}」";
+        $"Discard potion '{PotionName(p)}'";
 
     public static string SelectCard(CardModel c, SelectInfo? info, bool upgradeAny)
     {
-        string verb = "选择";
+        string verb = "Choose";
         if (upgradeAny || info?.PromptKey == "TO_UPGRADE")
-            verb = "升级";
+            verb = "upgrade";
         else if (info?.PromptKey == "TO_REMOVE" || (info?.Method?.Contains("Remove", StringComparison.OrdinalIgnoreCase) == true))
-            verb = "移除";
+            verb = "remove";
         else if (info?.PromptKey == "TO_TRANSFORM" || (info?.Method?.Contains("Transform", StringComparison.OrdinalIgnoreCase) == true))
-            verb = "变化";
+            verb = "transform";
         else if (info?.PromptKey == "TO_EXHAUST" || (info?.Method?.Contains("Exhaust", StringComparison.OrdinalIgnoreCase) == true))
-            verb = "消耗";
+            verb = "exhaust";
         else if (info?.PromptKey == "TO_DISCARD" || (info?.Method?.Contains("Discard", StringComparison.OrdinalIgnoreCase) == true))
-            verb = "丢弃";
+            verb = "discard";
         else if (info?.PromptKey == "TO_ENCHANT" || info?.Enchantment != null)
-            verb = "附魔";
-        return $"{verb}「{CardName(c)}」";
+            verb = "enchant";
+        return $"{verb}'{CardName(c)}'";
     }
 
     public static string ConfirmSelection(int selectedCount, int minSelect)
     {
         if (selectedCount == 0 && minSelect == 0)
-            return "跳过（不选卡牌）";
-        return selectedCount > 0 ? $"确认选择（已选 {selectedCount} 张）" : "确认选择";
+            return "Skip (choose no card)";
+        return selectedCount > 0 ? $"Confirm selection ({selectedCount} picked)" : "Confirm selection";
     }
 
     public static string CardRewardAlt(CardRewardAlternative alt)
@@ -338,22 +338,22 @@ public static class BridgeLocalize
             return CleanText(za);
         return id switch
         {
-            "SKIP" => "跳过选牌",
+            "SKIP" => "Skip card pick",
             _ => string.IsNullOrEmpty(txt) ? alt.OptionId : txt,
         };
     }
 
     public static string Bundle(int index, IReadOnlyList<CardModel> cards) =>
-        $"选择卡包 {index + 1}：{string.Join(" + ", cards.Select(c => $"「{CardName(c)}」"))}";
+        $"Pick bundle {index + 1}: {string.Join(" + ", cards.Select(c => $"'{CardName(c)}'"))}";
 
     public static string Reward(Reward r) => r switch
     {
-        GoldReward g => $"领取 {g.Amount} 金币",
-        PotionReward p => $"领取药水「{PotionName(p.Potion)}」",
-        RelicReward rr => $"领取遗物「{RelicName(rr.Relic)}」",
-        CardReward => "查看卡牌奖励",
-        _ when r.GetType().Name == "SpecialCardReward" => "领取特殊卡牌奖励",
-        _ => "领取战利品",
+        GoldReward g => $"Take {g.Amount} gold",
+        PotionReward p => $"Take potion '{PotionName(p.Potion)}'",
+        RelicReward rr => $"Take relic '{RelicName(rr.Relic)}'",
+        CardReward => "View card reward",
+        _ when r.GetType().Name == "SpecialCardReward" => "Take special card reward",
+        _ => "Take reward",
     };
 
     public static string EventOption(EventOption opt, Player me)
@@ -411,9 +411,9 @@ public static class BridgeLocalize
         if (opt.IsProceed && string.IsNullOrEmpty(desc))
         {
             if (string.IsNullOrEmpty(title) || !ContainsCjk(title))
-                result = "继续前进";
+                result = "Proceed";
             else
-                result = $"{title}（离开）";
+                result = $"{title} (leave)";
         }
         else if (!string.IsNullOrEmpty(title) && !string.IsNullOrEmpty(desc))
         {
@@ -429,13 +429,13 @@ public static class BridgeLocalize
         }
         else
         {
-            result = (opt.IsProceed || opt.TextKey == "PROCEED") ? "继续前进" : opt.TextKey;
+            result = (opt.IsProceed || opt.TextKey == "PROCEED") ? "Proceed" : opt.TextKey;
         }
 
         try
         {
             if (opt.WillKillPlayer?.Invoke(me) == true)
-                result += " [⚠致死]";
+                result += " [⚠ LETHAL]";
         }
         catch { }
 
@@ -455,13 +455,13 @@ public static class BridgeLocalize
             {
                 title = oid switch
                 {
-                    "HEAL" => "休息",
-                    "SMITH" => "锻造升级",
-                    "DIG" => "挖掘遗物",
-                    "LIFT" => "举重增力",
-                    "RECALL" => "回忆",
-                    "MEND" or "RESTORE" => "恢复",
-                    "EVOLVE" => "进化",
+                    "HEAL" => "Rest",
+                    "SMITH" => "Smith",
+                    "DIG" => "Dig",
+                    "LIFT" => "Lift",
+                    "RECALL" => "Recall",
+                    "MEND" or "RESTORE" => "Mend",
+                    "EVOLVE" => "Evolve",
                     _ => string.IsNullOrEmpty(title) ? opt.OptionId : title,
                 };
             }
@@ -472,59 +472,59 @@ public static class BridgeLocalize
             try
             {
                 var (actual, _, _) = RunSession.RestHealInfo(me);
-                return $"营火：{title}（回复 {actual} 生命）";
+                return $"Campfire: {title} (heal {actual} HP)";
             }
             catch { }
         }
 
         string desc = SafeLoc(opt.Description);
         if (!string.IsNullOrEmpty(desc) && ContainsCjk(desc) && opt is not SmithRestSiteOption)
-            return $"营火：【{title}】{desc}";
-        return $"营火：{title}";
+            return $"Campfire: [{title}] {desc}";
+        return $"Campfire: {title}";
     }
 
     public static string ShopBuy(MerchantEntry e) => e switch
     {
-        MerchantCardRemovalEntry => $"购买：删牌服务（{e.Cost} 金币）",
-        MerchantCardEntry c => $"购买卡牌「{CardName(c.CreationResult?.Card)}」（{e.Cost} 金币）",
-        MerchantRelicEntry r => $"购买遗物「{RelicName(r.Model)}」（{e.Cost} 金币）",
-        MerchantPotionEntry p => $"购买药水「{PotionName(p.Model)}」（{e.Cost} 金币）",
-        _ => $"购买商品（{e.Cost} 金币）",
+        MerchantCardRemovalEntry => $"Buy: card removal ({e.Cost} gold)",
+        MerchantCardEntry c => $"Buy card '{CardName(c.CreationResult?.Card)}' ({e.Cost} gold)",
+        MerchantRelicEntry r => $"Buy relic '{RelicName(r.Model)}' ({e.Cost} gold)",
+        MerchantPotionEntry p => $"Buy potion '{PotionName(p.Model)}' ({e.Cost} gold)",
+        _ => $"Buy item ({e.Cost} gold)",
     };
 
     public static string MapPointTypeZh(MapPointType pt) => pt switch
     {
-        MapPointType.Monster => "普通战斗",
-        MapPointType.Elite => "精英战斗",
-        MapPointType.Unknown => "未知事件(?)",
-        MapPointType.Shop => "商人商店",
-        MapPointType.RestSite => "休息处(火堆)",
-        MapPointType.Treasure => "宝箱房",
-        MapPointType.Boss => "首领(Boss)",
-        MapPointType.Ancient => "先古之民",
+        MapPointType.Monster => "Monster",
+        MapPointType.Elite => "Elite",
+        MapPointType.Unknown => "Unknown (?)",
+        MapPointType.Shop => "Shop",
+        MapPointType.RestSite => "Rest Site",
+        MapPointType.Treasure => "Treasure",
+        MapPointType.Boss => "Boss",
+        MapPointType.Ancient => "Ancient",
         _ => pt.ToString(),
     };
 
     public static string MapMove(MapPoint p, int index, int totalCount)
     {
         string typeZh = MapPointTypeZh(p.PointType);
-        string coordTag = $"第{p.coord.row + 1}层·列{p.coord.col + 1}";
+        string coordTag = $"row {p.coord.row + 1}, col {p.coord.col + 1}";
 
         if (p.PointType is MapPointType.Boss or MapPointType.Ancient && totalCount == 1)
-            return $"前往【{typeZh}】";
+            return $"Go to [{typeZh}]";
 
         if (totalCount <= 1)
-            return $"前往【{typeZh}】（{coordTag}）";
+            return $"Go to [{typeZh}] ({coordTag})";
 
         string lane = totalCount switch
         {
-            2 => index == 0 ? "左路" : "右路",
-            3 => index == 0 ? "左路" : index == 1 ? "中路" : "右路",
-            _ => $"左起第{index + 1}/{totalCount}路",
+            2 => index == 0 ? "Left" : "Right",
+            3 => index == 0 ? "Left" : index == 1 ? "Middle" : "Right",
+            _ => $"lane {index + 1}/{totalCount} from left",
         };
-        return $"前往{lane}【{typeZh}】（{coordTag}）";
+        return $"Go {lane} [{typeZh}] ({coordTag})";
     }
 
     public static string MinigameCell(int x, int y, bool big) =>
-        $"占卜 第{y + 1}行·第{x + 1}列（{(big ? "大范围3×3" : "单格精准")}）";
+        $"Divination row {y + 1}, col {x + 1} ({(big ? "3x3 area" : "single cell")})";
 }

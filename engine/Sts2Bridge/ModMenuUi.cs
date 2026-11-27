@@ -169,13 +169,13 @@ internal static class ModMenuUi
         vbox.AddThemeConstantOverride("separation", 8);
         panel.AddChild(vbox);
 
-        var title = new Label { Text = "⚙ 模组选项 · AI 预测与自动模式" };
+        var title = new Label { Text = "⚙ Mod options · AI predictions & auto-play" };
         BridgeFonts.ApplyFont(title, 16);
         title.AddThemeColorOverride("font_color", new Color(0.98f, 0.84f, 0.38f, 1f));
         vbox.AddChild(title);
 
         // 1. Top-K row
-        var topKRow = MakeRow(vbox, "预测候选数量 (Top-K):");
+        var topKRow = MakeRow(vbox, "Prediction candidates (Top-K):");
         var topKMinus = MakeSmallBtn(" - ");
         var topKSlider = new HSlider
         {
@@ -195,12 +195,12 @@ internal static class ModMenuUi
         topKRow.AddChild(topKLabel);
 
         // 2. Auto-Play row
-        var autoRow = MakeRow(vbox, "自动模式 (Auto-Play):");
+        var autoRow = MakeRow(vbox, "Auto-play:");
         var autoBtn = MakeActionBtn("", 220f);
         autoRow.AddChild(autoBtn);
 
         // 3. Action Delay row
-        var delayRow = MakeRow(vbox, "自动出牌间隔:");
+        var delayRow = MakeRow(vbox, "Action interval:");
         var delayMinus = MakeSmallBtn(" - ");
         var delaySlider = new HSlider
         {
@@ -220,18 +220,18 @@ internal static class ModMenuUi
         delayRow.AddChild(delayLabel);
 
         // 4. Backend row
-        var backendRow = MakeRow(vbox, "推理引擎:");
+        var backendRow = MakeRow(vbox, "Inference engine:");
         var backendBtn = MakeActionBtn("", 240f);
         backendRow.AddChild(backendBtn);
 
         // 5. Overlay Visibility row
-        var ovRow = MakeRow(vbox, "局内右上角预测面板:");
+        var ovRow = MakeRow(vbox, "Top-right prediction panel:");
         var ovBtn = MakeActionBtn("", 220f);
         ovRow.AddChild(ovBtn);
 
         var hint = new Label
         {
-            Text = "提示: 局内也可随时点击右上角 [⚙ 选项] 或按 F8(切换自动) / F9(单步) / F7(显隐面板)",
+            Text = "Tip: in a run you can also click [⚙ Options] top-right, or press F8 (auto) / F9 (step) / F7 (panel)",
         };
         BridgeFonts.ApplyFont(hint, 12);
         hint.AddThemeColorOverride("font_color", new Color(0.70f, 0.76f, 0.84f, 0.95f));
@@ -289,7 +289,7 @@ internal static class ModMenuUi
             refs.TopKSlider.Value = cfg.TopK;
             refs.TopKValue.Text = $"Top-{cfg.TopK}";
 
-            refs.AutoBtn.Text = cfg.AutoPlay ? "● 已开启 (自动执行最优动作)" : "○ 已关闭 (仅显示预测建议)";
+            refs.AutoBtn.Text = cfg.AutoPlay ? "● On (plays the best action)" : "○ Off (advice only)";
             refs.AutoBtn.Modulate = cfg.AutoPlay ? new Color(0.55f, 1.0f, 0.68f) : new Color(0.92f, 0.95f, 1.0f);
 
             refs.DelaySlider.Value = cfg.ActionDelayMs;
@@ -297,7 +297,7 @@ internal static class ModMenuUi
 
             refs.BackendBtn.Text = cfg.BackendDisplayLabel();
 
-            refs.OverlayBtn.Text = cfg.ShowOverlay ? "● 显示面板 (快捷键 F7)" : "○ 隐藏面板 (快捷键 F7)";
+            refs.OverlayBtn.Text = cfg.ShowOverlay ? "● Panel shown (F7)" : "○ Panel hidden (F7)";
         }
         finally
         {

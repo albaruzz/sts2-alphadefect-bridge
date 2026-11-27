@@ -1698,7 +1698,7 @@ public sealed class NativeModelManager
                     : null;
                 if (any == null)
                 {
-                    _statusText = $"未找到内置模型 ({ch}.s2nn)";
+                    _statusText = $"Built-in model not found ({ch}.s2nn)";
                     return null;
                 }
                 path = any;
@@ -1706,17 +1706,17 @@ public sealed class NativeModelManager
 
             try
             {
-                _statusText = $"正在加载内置模型 {Path.GetFileNameWithoutExtension(path)}...";
+                _statusText = $"Loading built-in model {Path.GetFileNameWithoutExtension(path)}...";
                 var sw = Stopwatch.StartNew();
                 var model = NativeModel.Load(path);
                 _loaded[ch] = model;
-                _statusText = $"内置模型就绪: {model.Character} v{model.CkptVersion}";
+                _statusText = $"Built-in model ready: {model.Character} v{model.CkptVersion}";
                 BridgeLog.Info($"Loaded NativeModel {path} (char={model.Character}, v{model.CkptVersion}, fmt={model.ObsFormat}) in {sw.Elapsed.TotalMilliseconds:0.0}ms");
                 return model;
             }
             catch (Exception e)
             {
-                _statusText = $"内置模型加载失败: {e.Message}";
+                _statusText = $"Built-in model failed to load: {e.Message}";
                 BridgeLog.Error($"Failed to load NativeModel {path}: {e}");
                 return null;
             }
@@ -1735,7 +1735,7 @@ public sealed class NativeModelManager
                     model = await EnsureLoading(key);
                 if (model == null)
                 {
-                    _lastError = _statusText.Length > 0 ? _statusText : $"未能加载角色模型 ({key})";
+                    _lastError = _statusText.Length > 0 ? _statusText : $"Could not load character model ({key})";
                     return;
                 }
                 _lastError = "";
@@ -1744,7 +1744,7 @@ public sealed class NativeModelManager
             }
             catch (Exception e)
             {
-                _lastError = $"推理异常: {e.GetBaseException().Message}";
+                _lastError = $"Inference error: {e.GetBaseException().Message}";
                 BridgeLog.Error($"NativeModel inference error on seq={seq}: {e}");
             }
         });

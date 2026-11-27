@@ -122,15 +122,15 @@ public sealed class BridgeOverlay
         titleLbl.AddThemeColorOverride("font_color", new Color(0.98f, 0.85f, 0.42f, 1f));
         toolbar.AddChild(titleLbl);
 
-        _autoBtn = MakeToolbarBtn("自动: 关");
+        _autoBtn = MakeToolbarBtn("Auto: OFF");
         _autoBtn.Pressed += () => OnToggleMode?.Invoke();
         toolbar.AddChild(_autoBtn);
 
-        _stepBtn = MakeToolbarBtn("单步");
+        _stepBtn = MakeToolbarBtn("Step");
         _stepBtn.Pressed += () => OnStepOnce?.Invoke();
         toolbar.AddChild(_stepBtn);
 
-        _optToggleBtn = MakeToolbarBtn("⚙ 选项");
+        _optToggleBtn = MakeToolbarBtn("⚙ Options");
         _optToggleBtn.Pressed += () =>
         {
             _drawerOpen = !_drawerOpen;
@@ -141,7 +141,7 @@ public sealed class BridgeOverlay
                 if (_collapseBtn != null) _collapseBtn.Text = "—";
             }
             if (_optDrawer != null) _optDrawer.Visible = _drawerOpen;
-            _optToggleBtn.Text = _drawerOpen ? "⚙ 收起" : "⚙ 选项";
+            _optToggleBtn.Text = _drawerOpen ? "⚙ Close" : "⚙ Options";
         };
         toolbar.AddChild(_optToggleBtn);
 
@@ -154,9 +154,9 @@ public sealed class BridgeOverlay
             {
                 _drawerOpen = false;
                 _optDrawer.Visible = false;
-                if (_optToggleBtn != null) _optToggleBtn.Text = "⚙ 选项";
+                if (_optToggleBtn != null) _optToggleBtn.Text = "⚙ Options";
             }
-            _collapseBtn.Text = _collapsed ? "展开" : "—";
+            _collapseBtn.Text = _collapsed ? "Expand" : "—";
         };
         toolbar.AddChild(_collapseBtn);
 
@@ -173,7 +173,7 @@ public sealed class BridgeOverlay
             AutowrapMode = TextServer.AutowrapMode.WordSmart,
             CustomMinimumSize = new Vector2(442f, 0f),
             SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
-            Text = "正在初始化 AlphaDefect AI 助手...",
+            Text = "Initializing AlphaDefect AI assistant...",
         };
         BridgeFonts.ApplyFont(_label, 13);
         _label.AddThemeColorOverride("font_color", new Color(0.93f, 0.95f, 0.98f, 1.0f));
@@ -201,7 +201,7 @@ public sealed class BridgeOverlay
         tkRow.AddThemeConstantOverride("separation", 5);
         var tkTitle = new Label
         {
-            Text = "候选数 Top-K:",
+            Text = "Candidates (Top-K):",
             MouseFilter = Control.MouseFilterEnum.Ignore,
             SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
         };
@@ -249,7 +249,7 @@ public sealed class BridgeOverlay
         dlRow.AddThemeConstantOverride("separation", 5);
         var dlTitle = new Label
         {
-            Text = "自动延迟:",
+            Text = "Auto delay:",
             MouseFilter = Control.MouseFilterEnum.Ignore,
             SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
         };
@@ -297,7 +297,7 @@ public sealed class BridgeOverlay
         bkRow.AddThemeConstantOverride("separation", 5);
         var bkTitle = new Label
         {
-            Text = "推理引擎:",
+            Text = "Inference engine:",
             MouseFilter = Control.MouseFilterEnum.Ignore,
             SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
         };
@@ -320,7 +320,7 @@ public sealed class BridgeOverlay
             if (_panel != null) _panel.Visible = _cfg.ShowOverlay;
             if (_autoBtn != null)
             {
-                _autoBtn.Text = _cfg.AutoPlay ? "自动: 开" : "自动: 关";
+                _autoBtn.Text = _cfg.AutoPlay ? "Auto: ON" : "Auto: OFF";
                 _autoBtn.Modulate = _cfg.AutoPlay ? new Color(0.50f, 1.0f, 0.65f) : new Color(0.95f, 0.97f, 1.0f);
             }
             if (_topKSlider != null) _topKSlider.Value = _cfg.TopK;
@@ -399,53 +399,53 @@ public sealed class BridgeOverlay
             _style.BorderColor = new Color(0.28f, 0.56f, 0.90f, 0.92f);
 
         var sb = new StringBuilder(512);
-        string modeTag = autoPlay ? "自动模式" : "辅助预测";
+        string modeTag = autoPlay ? "AUTO" : "ADVISORY";
         string engineTag;
         if (tcpConnected && _cfg.Backend != "builtin")
-            engineTag = reply?.CkptVersion is { } tv ? $"外部服务 v{tv}" : "外部服务已连接";
+            engineTag = reply?.CkptVersion is { } tv ? $"external service v{tv}" : "external service connected";
         else if (_cfg.Backend == "tcp")
-            engineTag = $"等待外部服务 ({_cfg.Host}:{_cfg.Port})";
+            engineTag = $"waiting for external service ({_cfg.Host}:{_cfg.Port})";
         else if (reply is { Source: "builtin" })
-            engineTag = $"内置模型: {reply.ModelCharacter} v{reply.CkptVersion}";
+            engineTag = $"built-in model: {reply.ModelCharacter} v{reply.CkptVersion}";
         else if (!string.IsNullOrEmpty(nativeStatus))
             engineTag = nativeStatus;
         else
-            engineTag = "内置引擎待命";
+            engineTag = "built-in engine idle";
 
         sb.AppendLine($"[{modeTag}] · {engineTag}");
 
         if (!string.IsNullOrEmpty(decisionKind))
         {
             string noteSuffix = !string.IsNullOrEmpty(statusNote) ? $" · {statusNote}" : "";
-            sb.AppendLine($"当前节点 #{seq}: {LocalizeDecision(decisionKind)}{(waitingReply ? " (计算中...)" : "")}{noteSuffix}");
+            sb.AppendLine($"Node #{seq}: {LocalizeDecision(decisionKind)}{(waitingReply ? " (computing...)" : "")}{noteSuffix}");
         }
         else if (!string.IsNullOrEmpty(statusNote))
         {
-            sb.AppendLine($"状态: {statusNote}");
+            sb.AppendLine($"State: {statusNote}");
         }
         else
         {
-            sb.AppendLine("状态: 等待玩家决策点...");
+            sb.AppendLine("State: waiting for a decision point...");
         }
 
         if (reply != null && reply.Seq == seq)
         {
-            sb.AppendLine($"下一步推荐: ▶ [{reply.Action + 1}] {reply.Label} ({reply.Prob * 100f:0.1}%)");
-            string winStr = reply.WinProb is { } wp ? $"预计胜率 {wp * 100f:0.1}%  |  " : "";
-            sb.AppendLine($"局面评估: {winStr}价值 {reply.Value:+0.000;-0.000;0.000} ({reply.InferMs:0.1}ms)");
+            sb.AppendLine($"Next: ▶ [{reply.Action + 1}] {reply.Label} ({reply.Prob * 100f:0.1}%)");
+            string winStr = reply.WinProb is { } wp ? $"Win prob {wp * 100f:0.1}%  |  " : "";
+            sb.AppendLine($"Eval: {winStr}value {reply.Value:+0.000;-0.000;0.000} ({reply.InferMs:0.1}ms)");
 
             if (reply.Searched)
             {
                 int sims = reply.SearchInfo?.Sims ?? 0;
                 float sms = reply.SearchInfo?.ElapsedMs ?? 0f;
-                string overrideTag = reply.Changed ? " [树搜索改判!]" : " [树搜索确认]";
-                sb.AppendLine($"树搜索: {sims} 次模拟 ({sms:0}ms){overrideTag}");
+                string overrideTag = reply.Changed ? " [tree search override!]" : " [tree search confirmed]";
+                sb.AppendLine($"Tree search: {sims} sims ({sms:0}ms){overrideTag}");
             }
 
             if (reply.TopK.Count > 0)
             {
                 int take = Math.Clamp(_cfg.TopK, 1, reply.TopK.Count);
-                sb.AppendLine($"候选预测 (Top-{take} / 共 {reply.TopK.Count} 项):");
+                sb.AppendLine($"Candidates (Top-{take} of {reply.TopK.Count}):");
                 for (int i = 0; i < take; i++)
                 {
                     var c = reply.TopK[i];
@@ -456,7 +456,7 @@ public sealed class BridgeOverlay
             }
         }
 
-        sb.Append("快捷键: [F8]自动  [F9]单步  [F7]显隐 (Mac需按Fn)");
+        sb.Append("Keys: [F8] auto  [F9] step  [F7] hide (Fn on Mac)");
         _label.Text = sb.ToString();
     }
 
@@ -468,17 +468,17 @@ public sealed class BridgeOverlay
 
     static string LocalizeDecision(string kind) => kind switch
     {
-        "Combat" => "战斗出牌",
-        "CardSelect" => "卡牌选择",
-        "CardReward" => "战后选牌",
-        "Bundle" => "卡包选择",
-        "Rewards" => "战利品领取",
-        "Event" => "事件/开局抉择",
-        "RestSite" => "休息处",
-        "Shop" => "商人商店",
-        "Treasure" => "宝箱遗物",
-        "Minigame" => "水晶球占卜",
-        "Map" => "地图选路",
+        "Combat" => "Combat",
+        "CardSelect" => "Card select",
+        "CardReward" => "Card reward",
+        "Bundle" => "Bundle",
+        "Rewards" => "Rewards",
+        "Event" => "Event / opening",
+        "RestSite" => "Rest Site",
+        "Shop" => "Shop",
+        "Treasure" => "Chest relic",
+        "Minigame" => "Divination",
+        "Map" => "Map route",
         _ => kind,
     };
 }

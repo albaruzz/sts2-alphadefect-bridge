@@ -1,9 +1,9 @@
 {
   "id": "Sts2Bridge",
-  "name": "AlphaDefect AI 助手 (Sts2Bridge)",
+  "name": "AlphaDefect AI Assistant (Sts2Bridge)",
   "author": "AlphaDefect-Public & Sts2Bridge Contributors",
-  "description": "内置全角色 AlphaDefect 神经网络预测与自动打牌模组（免 Python 开箱即用）。在局内实时显示下一步推荐、可调 Top-K 候选胜率与自动模式，并支持连接外部 play_live.py 启用 32 次模拟树搜索。",
-  "version": "1.2.1",
+  "description": "AlphaDefect neural-network predictions and auto-play for all six characters, no Python required. Shows the next recommended move, adjustable Top-K candidate probabilities and auto mode in-game, and can attach to an external play_live.py for 32-sim tree search over elites and bosses.",
+  "version": "1.2.1-en",
   "has_pck": false,
   "has_dll": true,
   "affects_gameplay": true

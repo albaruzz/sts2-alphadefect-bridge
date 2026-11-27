@@ -141,6 +141,31 @@ internal sealed class LiveSessionDriver
     RewardsSet? _lastRewardsSet;
     RestSiteSynchronizer? _subscribedRestSync;
 
+    static string? _diagLastSignature;
+    internal static void DiagState(string tag)
+    {
+        string S(Func<string> f) { try { return f(); } catch { return "ERR"; } }
+        string sig = tag
+            + " room=" + S(() => RunManager.Instance.DebugOnlyGetState()?.CurrentRoom?.GetType().Name ?? "null")
+            + " overlay=" + S(() => NOverlayStack.Instance?.Peek()?.GetType().Name ?? "none")
+            + " map=" + S(() => NMapScreen.Instance is { } m ? $"travel={m.IsTravelEnabled},traveling={m.IsTraveling}" : "none")
+            + " eventUi=" + S(() => NEventRoom.Instance is { } e ? (e.Layout?.GetType().Name ?? "layout=null") : "none")
+            + " shopUi=" + S(() => NMerchantRoom.Instance?.GetType().Name ?? "none")
+            + " restUi=" + S(() => NRestSiteRoom.Instance?.GetType().Name ?? "none");
+        if (sig == _diagLastSignature) return;
+        _diagLastSignature = sig;
+        BridgeLog.Info("[diag] " + sig);
+    }
+
+    static long _diagLastMs;
+    internal static void Diag(string msg)
+    {
+        long now = (long)Time.GetTicksMsec();
+        if (now - _diagLastMs < 1500) return;
+        _diagLastMs = now;
+        BridgeLog.Info("[diag] " + msg);
+    }
+
     int _seq;
     string? _currentSignature;
     ulong _stableSinceMs;
@@ -234,7 +259,7 @@ internal sealed class LiveSessionDriver
                 BridgeLog.Info($"Run ended (victory={victory}, act={state.CurrentActIndex + 1}, floor={state.TotalFloor}).");
             }
             _activeDecision = null;
-            _statusNote = (_shimSession.IsVictory ? "本局通关胜利!" : "本局已结束");
+            _statusNote = (_shimSession.IsVictory ? "Run won!" : "Run ended");
             return;
         }
 
@@ -262,13 +287,14 @@ internal sealed class LiveSessionDriver
             }
             else
             {
-                _statusNote = $"就绪: {autoDesc} (点[单步]或按F9执行)";
+                _statusNote = $"Ready: {autoDesc} (click [Step] or press F9)";
             }
             return;
         }
 
         if (poll == null || poll.Choices.Count == 0)
         {
+            DiagState(poll == null ? "null-poll" : $"empty-poll({poll.Choices.Count})");
             _currentSignature = null;
             _activeDecision = null;
             _waitingReply = false;
@@ -354,7 +380,7 @@ internal sealed class LiveSessionDriver
         _activeDecision = null;
         _currentSignature = null;
         _waitingReply = false;
-        _statusNote = "主菜单待命 (进入任意角色对局自动启用)";
+        _statusNote = "Standby at main menu (auto-enables in a run)";
     }
 
     void EnsureRunSubscriptions(RunState state)
@@ -459,7 +485,7 @@ internal sealed class LiveSessionDriver
         }
         catch (Exception e)
         {
-            _encodeError = $"观测编码失败: {e.GetBaseException().Message}";
+            _encodeError = $"Observation encoding failed: {e.GetBaseException().Message}";
             BridgeLog.Error($"Failed to encode/dispatch observation frame #{seq}: {e}");
             _waitingReply = false;
         }
@@ -498,7 +524,7 @@ internal sealed class LiveSessionDriver
         // 0. Capstone container (Player inspecting Deck / Compendium / Relics from top bar)
         if (NCapstoneContainer.Instance is { InUse: true })
         {
-            _statusNote = "正在查看顶栏界面 (关闭后恢复预测)";
+            _statusNote = "Viewing the top bar (close it to resume predictions)";
             return null;
         }
 
@@ -514,7 +540,7 @@ internal sealed class LiveSessionDriver
         {
             if (mapScreen.IsTraveling)
             {
-                _statusNote = "正在前往目标节点...";
+                _statusNote = "Heading to the next node...";
                 return null;
             }
             bool actAnimRunning = MapActAnimTweenField?.GetValue(mapScreen) is Tween tw
@@ -525,8 +551,8 @@ internal sealed class LiveSessionDriver
                 if (actAnimRunning)
                 {
                     canExecuteNow = false;
-                    _statusNote = "开幕地图滚动中 (可先查看路线推荐)";
-                    autoDesc = "跳过地图滚动动画";
+                    _statusNote = "Opening map is scrolling (route advice available)";
+                    autoDesc = "skip map scroll animation";
                     autoStep = () =>
                     {
                         MapCancelStartAnimMethod?.Invoke(mapScreen, null);
@@ -536,7 +562,7 @@ internal sealed class LiveSessionDriver
                 else
                 {
                     canExecuteNow = !inputDisabled;
-                    if (inputDisabled) _statusNote = "地图展开中...";
+                    if (inputDisabled) _statusNote = "Map opening...";
                 }
                 return BuildMapDecision(s, me, mapScreen);
             }
@@ -544,8 +570,8 @@ internal sealed class LiveSessionDriver
             if (actAnimRunning || s.CurrentRoom is MapRoom || (s.CurrentRoom is EventRoom && s.VisitedMapCoords.Count == 0))
             {
                 canExecuteNow = false;
-                _statusNote = "开幕地图滚动中 (可先查看路线推荐)";
-                autoDesc = "跳过地图滚动动画";
+                _statusNote = "Opening map is scrolling (route advice available)";
+                autoDesc = "skip map scroll animation";
                 autoStep = () =>
                 {
                     MapCancelStartAnimMethod?.Invoke(mapScreen, null);
@@ -553,14 +579,23 @@ internal sealed class LiveSessionDriver
                 };
                 return BuildMapDecision(s, me, mapScreen);
             }
-            _statusNote = "正在预览地图 (关闭地图返回当前房间决策)";
-            return null;
+            // A room UI on screen (event/ancient/shop/rest) means the map is only a background
+            // layer: fall through so the room itself can produce a decision.
+            bool roomUiVisible = (NEventRoom.Instance is { } evNode && evNode.IsVisibleInTree())
+                || (NMerchantRoom.Instance is { } shopNode && shopNode.IsVisibleInTree())
+                || (NRestSiteRoom.Instance is { } restNode && restNode.IsVisibleInTree());
+            if (!roomUiVisible)
+            {
+                _statusNote = "Previewing map (close it to return to the room decision)";
+                return null;
+            }
         }
 
         // 2. Visible Overlay screens (CardSelect, CardReward, Bundle, Rewards, Minigame)
         var topOverlay = PeekVisibleOverlay();
         if (topOverlay != null)
         {
+            Diag($"overlay: {topOverlay.GetType().Name} (room={s.CurrentRoom?.GetType().Name})");
             switch (topOverlay)
             {
                 case NChooseACardSelectionScreen chooseScreen:
@@ -575,8 +610,11 @@ internal sealed class LiveSessionDriver
                     return BuildRewardsDecision(me, rewardsScreen, out autoStep, out autoDesc);
                 case NCrystalSphereScreen sphereScreen:
                     return BuildCrystalSphereDecision(sphereScreen, out autoStep, out autoDesc);
+                case NMerchantInventory:
+                    // Shop inventory lives in the overlay stack; the room switch below builds Buy actions.
+                    break;
                 default:
-                    _statusNote = "等待当前弹窗关闭...";
+                    _statusNote = "Waiting for the popup to close...";
                     return null;
             }
         }
@@ -589,8 +627,14 @@ internal sealed class LiveSessionDriver
         if (CombatManager.Instance.IsInProgress)
             return BuildCombatDecision(me);
 
-        if (CombatManager.Instance.IsStarting || CombatManager.Instance.IsOverOrEnding)
+        // IsOverOrEnding lingers after a fight ends and can stay true for the whole next
+        // event/ancient/shop room, which used to block those decisions entirely.
+        if (CombatManager.Instance.IsStarting
+            || (CombatManager.Instance.IsOverOrEnding && s.CurrentRoom is CombatRoom))
+        {
+            Diag($"combat: starting={CombatManager.Instance.IsStarting} overOrEnding={CombatManager.Instance.IsOverOrEnding} room={s.CurrentRoom?.GetType().Name}");
             return null;
+        }
 
         // Track room changes
         if (!ReferenceEquals(s.CurrentRoom, _room))
@@ -616,14 +660,21 @@ internal sealed class LiveSessionDriver
             case EventRoom:
             {
                 var ev = TryGetLocalEvent();
-                if (ev == null) return null;
+                if (ev == null)
+                {
+                    Diag($"event-room: GetLocalEvent=null sync={(RunManager.Instance.EventSynchronizer == null ? "null" : "ok")} "
+                        + $"canonical={(s.CurrentRoom as EventRoom)?.CanonicalEvent?.GetType().Name ?? "null"} "
+                        + $"eventUi={(NEventRoom.Instance == null ? "null" : "ok")} roomLeft={_roomLeft}");
+                    return null;
+                }
                 if (IsEventOptionTaskRunning())
                 {
-                    _statusNote = "正在结算事件效果...";
+                    _statusNote = "Resolving event...";
                     return null;
                 }
                 if (ev.IsFinished)
                 {
+                    Diag($"event({ev.GetType().Name}): IsFinished=true -> finished-room path");
                     return HandleFinishedEventRoom(out autoStep, out autoDesc);
                 }
                 _eventFinishedSeenSinceMs = 0;
@@ -637,9 +688,13 @@ internal sealed class LiveSessionDriver
                 return BuildShopDecision(me, shopRoom);
 
             case TreasureRoom treasureRoom:
-                return BuildTreasureDecision(me, treasureRoom, out autoStep, out autoDesc);
+                Diag($"treasure: case-matched room={treasureRoom.GetType().FullName}");
+                var d = BuildTreasureDecision(me, treasureRoom, out autoStep, out autoDesc);
+                Diag($"treasure: BuildTreasureDecision returned {(d != null ? "Decision" : "null")}");
+                return d;
 
             default:
+                Diag($"room-switch: DEFAULT case hit for {s.CurrentRoom?.GetType().FullName}");
                 if (NMapScreen.Instance is { IsTravelEnabled: true, IsTraveling: false } ms)
                     return BuildMapDecision(s, me, ms);
                 return null;
@@ -707,7 +762,7 @@ internal sealed class LiveSessionDriver
         }
 
         int turn = pcs.TurnNumber;
-        d.Add(ActionKind.EndTurn, "结束回合", () =>
+        d.Add(ActionKind.EndTurn, "End turn", () =>
         {
             RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new EndPlayerTurnAction(me, turn));
             return Task.CompletedTask;
@@ -750,7 +805,7 @@ internal sealed class LiveSessionDriver
 
         if (min == 0)
         {
-            d.Add(ActionKind.ConfirmSelection, "跳过（不选卡牌）", () =>
+            d.Add(ActionKind.ConfirmSelection, "Skip (choose no card)", () =>
             {
                 if (ChooseCardSkipBtnField?.GetValue(screen) is NClickableControl skipBtn)
                     skipBtn.ForceClick();
@@ -816,7 +871,7 @@ internal sealed class LiveSessionDriver
 
         if (cancel)
         {
-            d.Add(ActionKind.Leave, "取消返回", () =>
+            d.Add(ActionKind.Leave, "Cancel / back", () =>
             {
                 _cancelRoom = s.CurrentRoom;
                 if (AccessTools.Field(st, "_closeButton")?.GetValue(screen) is NClickableControl closeBtn)
@@ -946,7 +1001,7 @@ internal sealed class LiveSessionDriver
         for (int i = 0; i < cards.Count; i++)
         {
             var card = cards[i].Card;
-            d.Add(ActionKind.PickCardReward, $"拿取卡牌「{BridgeLocalize.CardName(card)}」", () =>
+            d.Add(ActionKind.PickCardReward, $"Take card '{BridgeLocalize.CardName(card)}'", () =>
             {
                 var holder = screen.GetCardHolder(card);
                 if (holder != null)
@@ -1025,7 +1080,7 @@ internal sealed class LiveSessionDriver
             if (goldBtn != null)
             {
                 int amt = ((GoldReward)goldBtn.Reward!).Amount;
-                autoDesc = $"自动领取 {amt} 金币";
+                autoDesc = $"Auto-take {amt} gold";
                 autoStep = () => { goldBtn.ForceClick(); return Task.CompletedTask; };
                 return null;
             }
@@ -1037,7 +1092,7 @@ internal sealed class LiveSessionDriver
                 && RewardsFlow.IsNoDownside(rr.Relic) && b.IsEnabled);
             if (freeRelicBtn != null)
             {
-                autoDesc = $"自动领取遗物「{BridgeLocalize.RelicName(((RelicReward)freeRelicBtn.Reward!).Relic)}」";
+                autoDesc = $"Auto-take relic '{BridgeLocalize.RelicName(((RelicReward)freeRelicBtn.Reward!).Relic)}'";
                 autoStep = () => { freeRelicBtn.ForceClick(); return Task.CompletedTask; };
                 return null;
             }
@@ -1050,7 +1105,7 @@ internal sealed class LiveSessionDriver
         // Non-terminal rewards screen with nothing left -> auto-proceed
         if (!pr.IsTerminal && available.Count == 0 && RewardsProceedField?.GetValue(screen) is NClickableControl pbtn0 && pbtn0.IsEnabled)
         {
-            autoDesc = "关闭额外奖励栏";
+            autoDesc = "close extra rewards bar";
             autoStep = () => { pbtn0.ForceClick(); return Task.CompletedTask; };
             return null;
         }
@@ -1073,7 +1128,7 @@ internal sealed class LiveSessionDriver
 
         if (!set.DisallowSkipping || available.Count == 0)
         {
-            d.Add(ActionKind.Leave, "继续前进", () =>
+            d.Add(ActionKind.Leave, "Proceed", () =>
             {
                 if (RewardsProceedField?.GetValue(screen) is NClickableControl pbtn)
                     pbtn.ForceClick();
@@ -1104,7 +1159,7 @@ internal sealed class LiveSessionDriver
         {
             if (SphereProceedBtnField?.GetValue(screen) is NClickableControl pbtn && pbtn.IsVisibleInTree() && pbtn.IsEnabled)
             {
-                autoDesc = "完成占卜并离开";
+                autoDesc = "finish divination and leave";
                 autoStep = () => { pbtn.ForceClick(); return Task.CompletedTask; };
             }
             return null;
@@ -1149,11 +1204,20 @@ internal sealed class LiveSessionDriver
         autoDesc = null;
         canExecuteNow = true;
 
-        if (NEventRoom.Instance is not { } er) return null;
+        if (NEventRoom.Instance is not { } er)
+        {
+            Diag($"event({ev.GetType().Name}): NEventRoom.Instance=null room={_room?.GetType().Name}");
+            return null;
+        }
 
         var layout = er.Layout;
-        if (layout != null && CombatEventStartedProp?.GetValue(layout) is true)
+        // CombatEventStartedProp is only valid on NCombatEventLayout (not base NEventLayout or NAncientEventLayout).
+        if (layout is NCombatEventLayout combatLayout
+            && CombatEventStartedProp?.GetValue(combatLayout) is true)
+        {
+            Diag($"event({ev.GetType().Name}): CombatStarted=true layout={layout.GetType().Name}");
             return null;
+        }
 
         ulong now = Time.GetTicksMsec();
         List<NEventOptionButton> buttons;
@@ -1162,7 +1226,7 @@ internal sealed class LiveSessionDriver
             if (layout == null)
             {
                 _eventButtonsSeenSinceMs = 0;
-                _statusNote = "正在加载事件界面...";
+                _statusNote = "Loading event screen...";
                 return null;
             }
             // IMPORTANT: NEventRoom._Ready() assigns er.Layout synchronously BEFORE SetupLayout() awaits Cmd.Wait(0.2f).
@@ -1175,12 +1239,12 @@ internal sealed class LiveSessionDriver
                 _eventButtonsSeenSinceMs = 0;
                 _ancientLastLineSinceMs = 0;
                 _ancientNoHitboxSinceMs = 0;
-                _statusNote = "正在加载事件选项...";
+                _statusNote = "Loading event options...";
                 return null;
             }
             if (!buttons.Any(b => !b.Option.IsLocked && !b.Option.WasChosen))
             {
-                _statusNote = "正在刷新事件选项...";
+                _statusNote = "Refreshing event options...";
                 return null;
             }
             if (_eventButtonsSeenSinceMs == 0)
@@ -1203,13 +1267,14 @@ internal sealed class LiveSessionDriver
             var hitbox = AncientDialogueHitboxField?.GetValue(ancientLayout) as NClickableControl;
             bool hitboxActive = hitbox != null && hitbox.IsVisibleInTree() && hitbox.IsEnabled;
 
+            Diag($"ancient: dialogue={(AncientDialogueField?.GetValue(ancientLayout) as System.Collections.ICollection)?.Count} onLastLine={onLastLine} hitboxActive={hitboxActive} buttons={buttons.Count}");
             if (hitboxActive)
             {
                 _ancientLastLineSinceMs = 0;
                 _ancientNoHitboxSinceMs = 0;
                 canExecuteNow = false;
-                _statusNote = "先古对话中 (自动模式将推进对话，或点[单步])";
-                autoDesc = "推进先古对话";
+                _statusNote = "Ancient dialogue (Auto advances it, or click [Step])";
+                autoDesc = "advance ancient dialogue";
                 var hb = hitbox!;
                 autoStep = () =>
                 {
@@ -1224,7 +1289,7 @@ internal sealed class LiveSessionDriver
                 if (now - _ancientNoHitboxSinceMs < 1200)
                 {
                     canExecuteNow = false;
-                    _statusNote = "先古对话过渡中...";
+                    _statusNote = "Ancient dialogue transition...";
                 }
             }
             else
@@ -1240,7 +1305,7 @@ internal sealed class LiveSessionDriver
                 if ((hasDialogue && elapsedLastLine < 450) || (!focusReady && elapsedLastLine < 950))
                 {
                     canExecuteNow = false;
-                    _statusNote = "祝福选项展开中...";
+                    _statusNote = "Blessing options opening...";
                 }
             }
         }
@@ -1256,7 +1321,7 @@ internal sealed class LiveSessionDriver
                 if (!buttonsInteractive && now - _eventButtonsSeenSinceMs < 1200)
                 {
                     canExecuteNow = false;
-                    _statusNote = "事件选项展开中...";
+                    _statusNote = "Event options opening...";
                 }
             }
         }
@@ -1291,7 +1356,11 @@ internal sealed class LiveSessionDriver
             }, a: opt, b: tip);
         }
 
-        if (d.Choices.Count == 0) return null;
+        if (d.Choices.Count == 0)
+        {
+            Diag($"event({ev.GetType().Name}): 0 choices; layout={layout?.GetType().Name ?? "null"} finished={ev.IsFinished} buttons={buttons.Count} canExec={canExecuteNow}");
+            return null;
+        }
         AddPotionActions(me, d);
 
         // Single unlocked IsProceed option (e.g. final flavor page or blocked Ancient) with no out-of-combat potion choices:
@@ -1300,7 +1369,7 @@ internal sealed class LiveSessionDriver
         {
             if (canExecuteNow)
             {
-                autoDesc = "继续前进";
+                autoDesc = "Proceed";
                 autoStep = d.Choices[0].Run;
             }
             return null;
@@ -1365,10 +1434,10 @@ internal sealed class LiveSessionDriver
                 || (now - _eventFinishedSeenSinceMs >= 650);
             if (!interactive)
             {
-                _statusNote = "正在生成离开按钮...";
+                _statusNote = "Creating the leave button...";
                 return null;
             }
-            autoDesc = "离开事件";
+            autoDesc = "leave event";
             autoStep = () =>
             {
                 proceedBtn.ForceClick();
@@ -1380,11 +1449,11 @@ internal sealed class LiveSessionDriver
         // Wait briefly in case SetupLayout() / SetOptions() is still creating the PROCEED button
         if (er.CustomEventNode == null && er.Layout != null && (now - _eventFinishedSeenSinceMs < 400))
         {
-            _statusNote = "正在结算事件...";
+            _statusNote = "Resolving event...";
             return null;
         }
 
-        autoDesc = "离开事件";
+        autoDesc = "leave event";
         autoStep = () => NEventRoom.Proceed();
         return null;
     }
@@ -1405,8 +1474,8 @@ internal sealed class LiveSessionDriver
                 var confirmBtn = FindFirstEnabledButton(openModal);
                 if (confirmBtn != null)
                 {
-                    _statusNote = "检测到新手提示弹窗 (可自动关闭)";
-                    autoDesc = "关闭新手提示";
+                    _statusNote = "Tutorial popup detected (can auto-close)";
+                    autoDesc = "close tutorial popup";
                     autoStep = () =>
                     {
                         confirmBtn.ForceClick();
@@ -1416,7 +1485,7 @@ internal sealed class LiveSessionDriver
                 }
             }
 
-            _statusNote = "等待当前弹窗关闭...";
+            _statusNote = "Waiting for the popup to close...";
             return true;
         }
         catch
@@ -1446,7 +1515,7 @@ internal sealed class LiveSessionDriver
         {
             if (restUi.ProceedButton is { IsEnabled: true } pb && pb.IsVisibleInTree())
             {
-                autoDesc = "离开休息处";
+                autoDesc = "leave rest site";
                 autoStep = () => { pb.ForceClick(); return Task.CompletedTask; };
             }
             return null;
@@ -1477,7 +1546,7 @@ internal sealed class LiveSessionDriver
         {
             if (restUi.ProceedButton is { IsEnabled: true } pb && pb.IsVisibleInTree())
             {
-                autoDesc = "离开休息处";
+                autoDesc = "leave rest site";
                 autoStep = () => { _roomLeft = true; pb.ForceClick(); return Task.CompletedTask; };
             }
             return null;
@@ -1485,7 +1554,7 @@ internal sealed class LiveSessionDriver
 
         if (_restChosen)
         {
-            d.Add(ActionKind.Leave, "离开休息处", () =>
+            d.Add(ActionKind.Leave, "leave rest site", () =>
             {
                 _roomLeft = true;
                 if (restUi.ProceedButton is { IsEnabled: true } pb) pb.ForceClick();
@@ -1496,7 +1565,7 @@ internal sealed class LiveSessionDriver
         {
             if (restUi.ProceedButton is { IsEnabled: true } pb && pb.IsVisibleInTree())
             {
-                autoDesc = "离开休息处";
+                autoDesc = "leave rest site";
                 autoStep = () => { _roomLeft = true; pb.ForceClick(); return Task.CompletedTask; };
             }
             return null;
@@ -1508,13 +1577,22 @@ internal sealed class LiveSessionDriver
 
     Decision? BuildShopDecision(Player me, MerchantRoom shopRoom)
     {
-        if (NMerchantRoom.Instance is not { } shopUi) return null;
+        if (NMerchantRoom.Instance is not { } shopUi)
+        {
+            Diag($"shop: NMerchantRoom.Instance=null room={shopRoom.GetType().Name}");
+            return null;
+        }
 #if STS2_V0111
         var inv = shopRoom.GetLocalInventory();
 #else
         var inv = RunManager.Instance.MerchantSynchronizer.GetLocalInventory();
 #endif
-        if (inv == null) return null;
+        if (inv == null)
+        {
+            Diag($"shop: inventory=null ui={shopUi.GetType().Name}");
+            return null;
+        }
+        DiagState($"shop-g{me.Gold}-e{inv.AllEntries.Count()}-o{shopUi.Inventory?.IsOpen}");
 
         if (!_shopInitialized)
         {
@@ -1526,7 +1604,7 @@ internal sealed class LiveSessionDriver
         var d = new Decision(DecisionKind.Shop) { Context = $"Gold {me.Gold}" };
         AddShopEntries(d, inv, shopUi.Inventory);
 
-        d.Add(ActionKind.Leave, "离开商店", () =>
+        d.Add(ActionKind.Leave, "leave shop", () =>
         {
             _roomLeft = true;
             if (shopUi.ProceedButton is { IsEnabled: true } pb) pb.ForceClick();
@@ -1552,7 +1630,7 @@ internal sealed class LiveSessionDriver
 
         var d = new Decision(DecisionKind.Shop) { Context = $"Fake Merchant Gold {me.Gold}" };
         AddShopEntries(d, inv, fmUi?.Inventory);
-        d.Add(ActionKind.Leave, "离开假商人", () =>
+        d.Add(ActionKind.Leave, "leave fake merchant", () =>
         {
             _roomLeft = true;
             if (fmUi != null && FakeMerchProceedField?.GetValue(fmUi) is NClickableControl pb)
@@ -1577,24 +1655,20 @@ internal sealed class LiveSessionDriver
             string label = BridgeLocalize.ShopBuy(e);
             d.Add(ActionKind.Buy, label, async () =>
             {
-                if (uiInv != null)
-                {
-                    if (!uiInv.IsOpen) uiInv.Open();
-                    var slot = uiInv.GetAllSlots().FirstOrDefault(s => ReferenceEquals(s.Entry, entry));
-                    if (slot != null)
-                    {
-                        slot.Hitbox.ForceClick();
-                        _failed.Clear();
-                        return;
-                    }
-                }
+                // v0.114.0: NClickableControl.ForceClick() emits the Released signal, but the
+                // merchant slot's purchase is wired to MouseReleased(InputEventMouseButton), so the
+                // click never buys anything. Use the same direct purchase the game's AutoSlay uses.
+                bool ok;
 #if STS2_V0111
-                bool ok = await entry.OnTryPurchaseWrapper(inv);
-                if (ok && entry is MerchantCardRemovalEntry) uiInv?.OnCardRemovalUsed();
+                ok = await entry.OnTryPurchaseWrapper(inv);
 #else
-                bool ok = await entry.OnTryPurchaseUnsynchronized(inv);
+                ok = await entry.OnTryPurchaseUnsynchronized(inv);
 #endif
-                if (ok) _failed.Clear();
+                if (ok)
+                {
+                    _failed.Clear();
+                    if (entry is MerchantCardRemovalEntry) uiInv?.OnCardRemovalUsed();
+                }
                 else _failed.Add(entry);
             }, a: EntryObject(e), f0: e.Cost);
         }
@@ -1604,19 +1678,26 @@ internal sealed class LiveSessionDriver
     {
         autoStep = null;
         autoDesc = null;
-        if (NRun.Instance?.TreasureRoom is not { } trUi) return null;
+        Diag($"treasure: entry room={room.GetType().Name} nrun={NRun.Instance != null} treasureRoom={NRun.Instance?.TreasureRoom != null}");
+        if (NRun.Instance?.TreasureRoom is not { } trUi)
+        {
+            Diag($"treasure: NRun.Instance.TreasureRoom=null room={room.GetType().Name}");
+            return null;
+        }
 
         var sync = RunManager.Instance.TreasureRoomRelicSynchronizer;
-        bool opened = TreasureOpenedField != null
-            ? TreasureOpenedField.GetValue(trUi) is true
-            : (TreasureRelicOpenField?.GetValue(trUi) is true
-               || sync.CurrentRelics != null
-               || trUi.ProceedButton is { IsEnabled: true });
+        // sync.CurrentRelics is already populated on room entry (before the chest opens), so it
+        // must not be treated as "opened" — otherwise auto-take fires on a closed chest and eats
+        // the relic without the UI. Only real UI state counts here.
+        bool opened = TreasureOpenedField?.GetValue(trUi) is true
+            || TreasureRelicOpenField?.GetValue(trUi) is true
+            || (trUi.ProceedButton is { IsEnabled: true } pbOpen && pbOpen.IsVisibleInTree());
+        Diag($"treasure: ui={trUi.GetType().Name} opened={opened} syncRelics={sync.CurrentRelics?.Count ?? -1} proceedBtnEnabled={trUi.ProceedButton?.IsEnabled}");
         if (!opened)
         {
             if (TreasureChestBtnField?.GetValue(trUi) is NClickableControl chestBtn && chestBtn.IsEnabled)
             {
-                autoDesc = "打开宝箱";
+                autoDesc = "open chest";
                 autoStep = () => { chestBtn.ForceClick(); return Task.CompletedTask; };
             }
             return null;
@@ -1626,19 +1707,20 @@ internal sealed class LiveSessionDriver
         {
             if (trUi.ProceedButton is { IsEnabled: true } pb && pb.IsVisibleInTree())
             {
-                autoDesc = "离开宝箱房";
+                autoDesc = "leave chest room";
                 autoStep = () => { pb.ForceClick(); return Task.CompletedTask; };
             }
             return null;
         }
 
         var relics = sync.CurrentRelics;
+        Diag($"treasure: relics={relics?.Count ?? 0} autoFree={_cfg.AutoFreeRelics}");
         if (relics == null || relics.Count == 0)
         {
             if (trUi.ProceedButton is { IsEnabled: true } pbEmpty && pbEmpty.IsVisibleInTree())
             {
                 _relicDecided = true;
-                autoDesc = "离开宝箱房";
+                autoDesc = "leave chest room";
                 autoStep = () => { pbEmpty.ForceClick(); return Task.CompletedTask; };
             }
             return null;
@@ -1646,7 +1728,7 @@ internal sealed class LiveSessionDriver
 
         if (_cfg.AutoFreeRelics && relics.Count == 1 && RewardsFlow.IsNoDownside(relics[0]))
         {
-            autoDesc = $"自动拿取宝箱遗物「{BridgeLocalize.RelicName(relics[0])}」";
+            autoDesc = $"Auto-take chest relic '{BridgeLocalize.RelicName(relics[0])}'";
             autoStep = () =>
             {
                 _relicDecided = true;
@@ -1660,7 +1742,7 @@ internal sealed class LiveSessionDriver
         for (int i = 0; i < relics.Count; i++)
         {
             int k = i;
-            d.Add(ActionKind.PickRelic, $"拿取宝箱遗物「{BridgeLocalize.RelicName(relics[i])}」", () =>
+            d.Add(ActionKind.PickRelic, $"Take chest relic '{BridgeLocalize.RelicName(relics[i])}'", () =>
             {
                 _relicDecided = true;
                 ClickTreasureRelic(trUi, sync, k);
@@ -1668,7 +1750,7 @@ internal sealed class LiveSessionDriver
             }, a: relics[i]);
         }
 
-        d.Add(ActionKind.SkipRelic, "跳过遗物", () =>
+        d.Add(ActionKind.SkipRelic, "skip relic", () =>
         {
             _relicDecided = true;
             if (trUi.ProceedButton is { IsEnabled: true } pb) pb.ForceClick();
@@ -1793,7 +1875,7 @@ internal sealed class LiveSessionDriver
                 var pot = p;
                 d.Add(ActionKind.UsePotion, BridgeLocalize.UsePotion(p, null, null), () =>
                 {
-                    // Close shop rug before throwing FoulPotion at merchant (matching 决策记录 #227)
+                    // Close shop rug before throwing FoulPotion at merchant (matching decision log #227)
                     if (shopInventoryUi is { IsOpen: true } && pot.Id.Entry == "FOUL_POTION")
                         AccessTools.Method(typeof(NMerchantInventory), "Close")?.Invoke(shopInventoryUi, null);
                     pot.EnqueueManualUse(null);
