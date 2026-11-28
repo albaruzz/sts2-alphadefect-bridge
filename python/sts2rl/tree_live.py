@@ -229,12 +229,13 @@ class TreeSearchAdvisor(H.HeadlessSearchAdvisor):
         if self._run is old:
             return          # 同一局的局信息重发（重连等）：照常
         self._run_no += 1
-        self._fight, self._act3_bosses, self._ctx, self._exact = None, 0, {}, bool(self._tracked)
-        if self._run is not None and self.mirror_extra and self._tracked:
-            # 测试：镜像按另加的键重开（与“游戏”同一套 reset）
+        self._fight, self._act3_bosses, self._ctx, self._exact = None, 0, {}, False
+        if self._run is not None:
+            # 镜像必须用与实机相同的 reset 参数（观测格式、截断开关等），否则第一帧就对不上。
             self._run = {**self._run, **self.mirror_extra}
             try:
                 self._mframe = self._mirror_req(self._run)
+                self._tracked = True
             except Exception as e:
                 self._lose(f"镜像开局失败：{type(e).__name__}")
 
